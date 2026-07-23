@@ -25,3 +25,12 @@ func FromTime(t time.Time) BusinessDate {
 func (d BusinessDate) String() string {
 	return string(d)
 }
+
+func (d BusinessDate) Valid() error {
+	if d == "" {
+		return fmt.Errorf("business date is required")
+	}
+
+	_, err := Parse(d.String())
+	return err
+}

@@ -4,19 +4,21 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ruth411/circle/internal/contracts"
 	"github.com/ruth411/circle/internal/core/ingredient"
-	"github.com/ruth411/circle/internal/ordering"
 )
 
 func TestRecordDepletionIsAppendOnlyAndIdempotent(t *testing.T) {
 	now := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
-	service := NewService()
+	service := NewService(map[string]ingredient.Unit{
+		"chicken": ingredient.UnitGram,
+		"rice":    ingredient.UnitGram,
+	})
 
-	order := ordering.Order{
-		ID:       "order-1",
-		Status:   ordering.OrderStatusClosed,
-		ClosedAt: &now,
-		Lines: []ordering.OrderLine{
+	order := contracts.ClosedOrder{
+		OrderID:  "order-1",
+		ClosedAt: now,
+		Lines: []contracts.ClosedOrderLine{
 			{
 				LineID:          "line-1",
 				IngredientUsage: map[string]float64{"chicken": 150, "rice": 100},
@@ -34,8 +36,8 @@ func TestRecordDepletionIsAppendOnlyAndIdempotent(t *testing.T) {
 	if movements[0].Quantity >= 0 {
 		t.Fatalf("movement quantity = %v, want negative", movements[0].Quantity)
 	}
-	if movements[0].Unit != ingredient.UnitEach {
-		t.Fatalf("movement unit = %s, want placeholder base-unit marker", movements[0].Unit)
+	if movements[0].Unit != ingredient.UnitGram {
+		t.Fatalf("movement unit = %s, want g", movements[0].Unit)
 	}
 
 	movements, err = service.RecordDepletion(order)

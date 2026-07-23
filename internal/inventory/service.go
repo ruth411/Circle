@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ruth411/circle/internal/contracts"
 	"github.com/ruth411/circle/internal/core/ingredient"
-	"github.com/ruth411/circle/internal/ordering"
 )
 
 type Movement struct {
@@ -20,43 +20,52 @@ type Movement struct {
 
 type Service struct {
 	mu        sync.Mutex
+	baseUnits map[string]ingredient.Unit
 	recorded  map[string]bool
 	movements []Movement
 }
 
-func NewService() *Service {
+func NewService(baseUnits map[string]ingredient.Unit) *Service {
+	clonedBaseUnits := make(map[string]ingredient.Unit, len(baseUnits))
+	for ingredientID, unit := range baseUnits {
+		clonedBaseUnits[ingredientID] = unit
+	}
+
 	return &Service{
-		recorded: map[string]bool{},
+		baseUnits: clonedBaseUnits,
+		recorded:  map[string]bool{},
 	}
 }
 
-func (s *Service) RecordDepletion(order ordering.Order) ([]Movement, error) {
+func (s *Service) RecordDepletion(order contracts.ClosedOrder) ([]Movement, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if order.Status != ordering.OrderStatusClosed {
-		return nil, fmt.Errorf("order %s must be closed before depletion", order.ID)
+	if order.ClosedAt.IsZero() {
+		return nil, fmt.Errorf("order %s must have a closed timestamp", order.OrderID)
 	}
 
-	if s.recorded[order.ID] {
+	if s.recorded[order.OrderID] {
 		return nil, nil
 	}
 
 	var movements []Movement
 	seq := 1
-	occurredAt := time.Now().UTC()
-	if order.ClosedAt != nil {
-		occurredAt = order.ClosedAt.UTC()
-	}
+	occurredAt := order.ClosedAt.UTC()
 
 	for _, line := range order.Lines {
 		for ingredientID, qty := range line.IngredientUsage {
+			unit, ok := s.baseUnits[ingredientID]
+			if !ok {
+				return nil, fmt.Errorf("missing base unit for ingredient %s", ingredientID)
+			}
+
 			movement := Movement{
-				ID:           fmt.Sprintf("%s-%d", order.ID, seq),
-				OrderID:      order.ID,
+				ID:           fmt.Sprintf("%s-%d", order.OrderID, seq),
+				OrderID:      order.OrderID,
 				IngredientID: ingredientID,
 				Quantity:     -qty,
-				Unit:         ingredient.UnitEach, // ponytail: usage is already normalized to base units; attach per-ingredient base units once inventory reads the ingredient catalog.
+				Unit:         unit,
 				OccurredAt:   occurredAt,
 			}
 			seq++
@@ -65,7 +74,7 @@ func (s *Service) RecordDepletion(order ordering.Order) ([]Movement, error) {
 		}
 	}
 
-	s.recorded[order.ID] = true
+	s.recorded[order.OrderID] = true
 	return movements, nil
 }
 

@@ -8,17 +8,17 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ruth411/circle/internal/contracts"
 	"github.com/ruth411/circle/internal/core/ingredient"
-	"github.com/ruth411/circle/internal/ordering"
 )
 
 const TokenTTL = 24 * time.Hour
 
 type PublicOrderItem struct {
-	LineID   string
-	Name     string
-	Quantity int
-	Macros   ingredient.MacroValues
+	ItemID string
+	LineID string
+	Name   string
+	Macros ingredient.MacroValues
 }
 
 type ReceiptToken struct {
@@ -31,7 +31,7 @@ type ReceiptToken struct {
 type Claim struct {
 	ID              string
 	Token           string
-	SelectedLineIDs []string
+	SelectedItemIDs []string
 	Totals          ingredient.MacroValues
 	UpdatedAt       time.Time
 }
@@ -53,32 +53,40 @@ func NewService() *Service {
 	}
 }
 
-func (s *Service) IssueToken(order ordering.Order) (ReceiptToken, error) {
+func (s *Service) IssueToken(order contracts.ClosedOrder) (ReceiptToken, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	if order.Status != ordering.OrderStatusClosed {
-		return ReceiptToken{}, fmt.Errorf("order %s must be closed before issuing a token", order.ID)
-	}
 
 	raw := make([]byte, 18)
 	if _, err := io.ReadFull(s.rand, raw); err != nil {
 		return ReceiptToken{}, err
 	}
 
-	items := make([]PublicOrderItem, len(order.Lines))
-	for i, line := range order.Lines {
-		items[i] = PublicOrderItem{
-			LineID:   line.LineID,
-			Name:     line.Name,
-			Quantity: line.Quantity,
-			Macros:   line.ResolvedMacros,
+	var items []PublicOrderItem
+	for _, line := range order.Lines {
+		if line.Quantity <= 0 {
+			return ReceiptToken{}, fmt.Errorf("line %s has invalid quantity %d", line.LineID, line.Quantity)
+		}
+
+		perItemMacros := line.ResolvedMacros.Scale(1 / float64(line.Quantity))
+		for i := 1; i <= line.Quantity; i++ {
+			itemID := line.LineID
+			if line.Quantity > 1 {
+				itemID = fmt.Sprintf("%s#%d", line.LineID, i)
+			}
+
+			items = append(items, PublicOrderItem{
+				ItemID: itemID,
+				LineID: line.LineID,
+				Name:   line.Name,
+				Macros: perItemMacros,
+			})
 		}
 	}
 
 	token := ReceiptToken{
 		Token:     base64.RawURLEncoding.EncodeToString(raw),
-		OrderID:   order.ID,
+		OrderID:   order.OrderID,
 		ExpiresAt: s.now().Add(TokenTTL),
 		Items:     items,
 	}
@@ -100,7 +108,7 @@ func (s *Service) ResolveToken(token string) (ReceiptToken, error) {
 	return cloneToken(stored), nil
 }
 
-func (s *Service) SubmitClaim(claimID string, token string, selectedLineIDs []string) (Claim, error) {
+func (s *Service) SubmitClaim(claimID string, token string, selectedItemIDs []string) (Claim, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -114,15 +122,15 @@ func (s *Service) SubmitClaim(claimID string, token string, selectedLineIDs []st
 
 	selected := map[string]bool{}
 	totals := ingredient.MacroValues{}
-	for _, lineID := range selectedLineIDs {
-		if selected[lineID] {
-			return Claim{}, fmt.Errorf("line %s selected multiple times", lineID)
+	for _, itemID := range selectedItemIDs {
+		if selected[itemID] {
+			return Claim{}, fmt.Errorf("item %s selected multiple times", itemID)
 		}
-		selected[lineID] = true
+		selected[itemID] = true
 
 		found := false
 		for _, item := range stored.Items {
-			if item.LineID != lineID {
+			if item.ItemID != itemID {
 				continue
 			}
 			totals = totals.Add(item.Macros)
@@ -130,7 +138,7 @@ func (s *Service) SubmitClaim(claimID string, token string, selectedLineIDs []st
 			break
 		}
 		if !found {
-			return Claim{}, fmt.Errorf("line %s not found for token", lineID)
+			return Claim{}, fmt.Errorf("item %s not found for token", itemID)
 		}
 	}
 
@@ -141,7 +149,7 @@ func (s *Service) SubmitClaim(claimID string, token string, selectedLineIDs []st
 	claim := Claim{
 		ID:              claimID,
 		Token:           token,
-		SelectedLineIDs: append([]string(nil), selectedLineIDs...),
+		SelectedItemIDs: append([]string(nil), selectedItemIDs...),
 		Totals:          totals,
 		UpdatedAt:       s.now(),
 	}

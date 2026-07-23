@@ -6,15 +6,18 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ruth411/circle/internal/contracts"
 	"github.com/ruth411/circle/internal/core/ingredient"
 	"github.com/ruth411/circle/internal/core/recipe"
+	"github.com/ruth411/circle/internal/platform/biztime"
 )
 
 type OrderStatus string
 
 const (
-	OrderStatusOpen   OrderStatus = "open"
-	OrderStatusClosed OrderStatus = "closed"
+	OrderStatusOpen    OrderStatus = "open"
+	OrderStatusClosing OrderStatus = "closing"
+	OrderStatusClosed  OrderStatus = "closed"
 )
 
 type PaymentProvider interface {
@@ -55,7 +58,7 @@ type Order struct {
 	LocationID      string
 	SnapshotID      string
 	SnapshotVersion int
-	BusinessDate    time.Time
+	BusinessDate    biztime.BusinessDate
 	Status          OrderStatus
 	Lines           []OrderLine
 	ClosedAt        *time.Time
@@ -66,7 +69,7 @@ type CreateOrderInput struct {
 	CheckID      string
 	LocationID   string
 	SnapshotID   string
-	BusinessDate time.Time
+	BusinessDate biztime.BusinessDate
 }
 
 type AddLineInput struct {
@@ -111,17 +114,26 @@ func (s *Service) CreateOrder(input CreateOrderInput) (Order, error) {
 	if !ok {
 		return Order{}, fmt.Errorf("snapshot %s not found", input.SnapshotID)
 	}
-
-	if existing, ok := s.orders[input.OrderID]; ok {
-		if existing.SnapshotID == input.SnapshotID && existing.LocationID == input.LocationID {
-			return cloneOrder(existing), nil
-		}
-		return Order{}, fmt.Errorf("order %s already exists with different attributes", input.OrderID)
+	if snapshot.LocationID != input.LocationID {
+		return Order{}, fmt.Errorf("snapshot %s belongs to location %s, not %s", snapshot.ID, snapshot.LocationID, input.LocationID)
+	}
+	if err := input.BusinessDate.Valid(); err != nil {
+		return Order{}, err
 	}
 
 	checkID := input.CheckID
 	if checkID == "" {
 		checkID = input.OrderID
+	}
+
+	if existing, ok := s.orders[input.OrderID]; ok {
+		if existing.CheckID == checkID &&
+			existing.LocationID == input.LocationID &&
+			existing.SnapshotID == input.SnapshotID &&
+			existing.BusinessDate == input.BusinessDate {
+			return cloneOrder(existing), nil
+		}
+		return Order{}, fmt.Errorf("order %s already exists with different attributes", input.OrderID)
 	}
 
 	order := Order{
@@ -130,7 +142,7 @@ func (s *Service) CreateOrder(input CreateOrderInput) (Order, error) {
 		LocationID:      input.LocationID,
 		SnapshotID:      snapshot.ID,
 		SnapshotVersion: snapshot.Version,
-		BusinessDate:    input.BusinessDate.UTC(),
+		BusinessDate:    input.BusinessDate,
 		Status:          OrderStatusOpen,
 	}
 
@@ -150,8 +162,8 @@ func (s *Service) AddLine(input AddLineInput) (OrderLine, error) {
 	if !ok {
 		return OrderLine{}, fmt.Errorf("order %s not found", input.OrderID)
 	}
-	if order.Status == OrderStatusClosed {
-		return OrderLine{}, fmt.Errorf("order %s is closed", input.OrderID)
+	if order.Status != OrderStatusOpen {
+		return OrderLine{}, fmt.Errorf("order %s is not editable", input.OrderID)
 	}
 
 	snapshot, ok := s.snapshots[order.SnapshotID]
@@ -212,15 +224,28 @@ func (s *Service) CloseCheck(ctx context.Context, input CloseCheckInput) (Order,
 		s.mu.Unlock()
 		return cloneOrder(order), nil
 	}
+	if order.Status == OrderStatusClosing {
+		s.mu.Unlock()
+		return Order{}, fmt.Errorf("order %s is already closing", input.OrderID)
+	}
 
 	total := orderTotal(order)
 	if input.Tender.AmountMinor < total {
 		s.mu.Unlock()
 		return Order{}, fmt.Errorf("tender amount %d is less than order total %d", input.Tender.AmountMinor, total)
 	}
+	order.Status = OrderStatusClosing
+	s.orders[order.ID] = order
 	s.mu.Unlock()
 
 	if err := s.payment.Process(ctx, input.Tender); err != nil {
+		s.mu.Lock()
+		order = s.orders[input.OrderID]
+		if order.Status == OrderStatusClosing {
+			order.Status = OrderStatusOpen
+			s.orders[order.ID] = order
+		}
+		s.mu.Unlock()
 		return Order{}, err
 	}
 
@@ -228,11 +253,37 @@ func (s *Service) CloseCheck(ctx context.Context, input CloseCheckInput) (Order,
 	defer s.mu.Unlock()
 
 	order = s.orders[input.OrderID]
+	if order.Status != OrderStatusClosing {
+		return Order{}, fmt.Errorf("order %s is not ready to close", input.OrderID)
+	}
 	now := time.Now().UTC()
 	order.Status = OrderStatusClosed
 	order.ClosedAt = &now
 	s.orders[order.ID] = order
 	return cloneOrder(order), nil
+}
+
+func ToClosedOrder(order Order) (contracts.ClosedOrder, error) {
+	if order.Status != OrderStatusClosed || order.ClosedAt == nil {
+		return contracts.ClosedOrder{}, fmt.Errorf("order %s is not closed", order.ID)
+	}
+
+	lines := make([]contracts.ClosedOrderLine, len(order.Lines))
+	for i, line := range order.Lines {
+		lines[i] = contracts.ClosedOrderLine{
+			LineID:          line.LineID,
+			Name:            line.Name,
+			Quantity:        line.Quantity,
+			ResolvedMacros:  line.ResolvedMacros,
+			IngredientUsage: cloneUsage(line.IngredientUsage),
+		}
+	}
+
+	return contracts.ClosedOrder{
+		OrderID:  order.ID,
+		ClosedAt: order.ClosedAt.UTC(),
+		Lines:    lines,
+	}, nil
 }
 
 func findSnapshotItem(snapshot recipe.MenuSnapshot, menuItemID string) (recipe.SnapshotItem, error) {
