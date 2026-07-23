@@ -500,3 +500,16 @@ depends on one.
 - When touching nutrition, assume the numbers will be shown to someone who is
   making dietary decisions with them. Accuracy of the computation matters even
   though the underlying data is approximate.
+- Follow the phase workflow strictly:
+  1. implement the current phase
+  2. run Snyk scans
+  3. debug and fix according to the Snyk report
+  4. run Snyk again
+  5. repeat the debug/scan loop until the phase is at zero reported bugs
+  6. only then commit the phase changes
+- Do not commit a phase before the Snyk loop is finished unless explicitly told
+  to do so.
+- The final phase commit must include the final Snyk report summary in the
+  commit message body or description, so the commit explains what was scanned
+  and that the final pass was clean.
+- Treat Snyk as part of the phase exit criteria, not as an optional later pass.
