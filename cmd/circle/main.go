@@ -1,8 +1,11 @@
 package main
 
 import (
-	"log"
 	"net/http"
+	"os"
+	"time"
+
+	"log/slog"
 
 	"github.com/ruth411/circle/internal/platform/config"
 	"github.com/ruth411/circle/internal/platform/httpapi"
@@ -10,10 +13,20 @@ import (
 
 func main() {
 	cfg := config.Load()
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: cfg.LogLevel,
+	}))
 	addr := ":" + cfg.Port
 
-	log.Printf("circle listening on %s", addr)
-	if err := http.ListenAndServe(addr, httpapi.NewServer()); err != nil {
-		log.Fatal(err)
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           httpapi.NewServer(logger),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	logger.Info("circle listening", "addr", addr, "env", cfg.AppEnv)
+	if err := server.ListenAndServe(); err != nil {
+		logger.Error("server stopped", "err", err)
+		os.Exit(1)
 	}
 }

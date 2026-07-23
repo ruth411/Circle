@@ -8,10 +8,12 @@ import (
 
 type Event struct {
 	ID          string
-	AggregateID string
 	Name        string
-	Payload     string
+	AggregateID string
+	LocationID  string
+	Payload     []byte
 	OccurredAt  time.Time
+	CreatedAt   time.Time
 }
 
 type Outbox interface {
@@ -27,6 +29,9 @@ func (o *MemoryOutbox) Append(_ context.Context, event Event) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
+	if event.CreatedAt.IsZero() {
+		event.CreatedAt = time.Now().UTC()
+	}
 	o.events = append(o.events, event)
 	return nil
 }
