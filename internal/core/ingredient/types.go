@@ -1,6 +1,9 @@
 package ingredient
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 type Unit string
 
@@ -13,8 +16,9 @@ const (
 type Provenance string
 
 const (
-	ProvenanceManual Provenance = "manual"
-	ProvenanceUSDA   Provenance = "usda"
+	ProvenanceManual             Provenance = "manual"
+	ProvenanceUSDA               Provenance = "usda"
+	ProvenanceRestaurantOfficial Provenance = "restaurant_official"
 )
 
 type VerificationStatus string
@@ -50,20 +54,25 @@ func (m MacroValues) Scale(multiplier float64) MacroValues {
 }
 
 type Ingredient struct {
-	ID                 string
-	LocationID         string
-	Name               string
-	Category           string
-	BaseUnit           Unit
-	AlternateUnits     map[Unit]float64
-	MacrosPerBaseUnit  MacroValues
-	CurrentCostMinor   int64
-	Currency           string
-	OnHandBaseUnits    float64
-	ParLevelBaseUnits  float64
-	Provenance         Provenance
-	VerificationStatus VerificationStatus
-	YieldFactors       map[string]float64
+	ID                  string
+	LocationID          string
+	SourceItemID        string
+	Name                string
+	Category            string
+	BaseUnit            Unit
+	AlternateUnits      map[Unit]float64
+	MacrosPerBaseUnit   MacroValues
+	CurrentCostMinor    int64
+	Currency            string
+	OnHandBaseUnits     float64
+	ParLevelBaseUnits   float64
+	Provenance          Provenance
+	VerificationStatus  VerificationStatus
+	ServingSizeQuantity float64
+	ServingSizeUnit     string
+	YieldFactors        map[string]float64
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
 }
 
 func (i Ingredient) ToBaseUnit(quantity float64, unit Unit) (float64, error) {

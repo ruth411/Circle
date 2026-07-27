@@ -6,6 +6,10 @@ Restaurants already know what goes into an order. Circle uses that same data to
 estimate the calories, protein, carbs, and fat for the exact meal a customer
 ordered.
 
+The current prototype seed starts with official public Chipotle menu data using
+single-serving nutrition values, while keeping the system tenant-aware so other
+restaurant brands can be added later without cross-access.
+
 ## What it does
 
 - Stores ingredients with units, cost, stock, and macros.
@@ -75,6 +79,29 @@ The priority is getting the domain model right:
 - recipe and modifier structure
 - nutrition roll-up
 - inventory and accounting links
+
+## Local startup
+
+Circle now expects a local Postgres database and applies project migrations on
+startup.
+
+Set `DATABASE_URL` before running:
+
+```bash
+export DATABASE_URL='postgres://postgres:postgres@localhost:5432/circle?sslmode=disable'
+go run ./cmd/circle
+```
+
+For the seeded Chipotle demo ingredient routes, use a staff location header and
+one of the seeded dev sessions:
+
+- `X-Location-Id: loc-chipotle-charlotte`
+- `X-Session-Id: session-chipotle-charlotte-dev`
+
+or:
+
+- `X-Location-Id: loc-chipotle-raleigh`
+- `X-Session-Id: session-chipotle-raleigh-dev`
 
 ## Suggested build order
 

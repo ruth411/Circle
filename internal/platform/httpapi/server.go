@@ -9,6 +9,9 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+
+	"github.com/ruth411/circle/internal/core/ingredient"
+	"github.com/ruth411/circle/internal/tenancy"
 )
 
 type contextKey string
@@ -26,9 +29,26 @@ type ErrorBody struct {
 }
 
 func NewServer(logger *slog.Logger) http.Handler {
+	return NewServerWithDependencies(logger, Dependencies{})
+}
+
+type Dependencies struct {
+	IngredientService    *ingredient.Service
+	SessionValidator     SessionValidator
+	LocationResolver     tenancy.Resolver
+	OrganizationResolver tenancy.OrganizationResolver
+}
+
+func NewServerWithDependencies(logger *slog.Logger, deps Dependencies) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", healthz)
 	mux.HandleFunc("/readyz", healthz)
+	registerIngredientRoutes(mux, ingredientDependencies{
+		service:              deps.IngredientService,
+		locationResolver:     deps.LocationResolver,
+		organizationResolver: deps.OrganizationResolver,
+		sessionValidator:     deps.SessionValidator,
+	})
 	return withRecover(logger, withRequestID(withLogging(logger, jsonRoutes(mux))))
 }
 

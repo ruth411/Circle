@@ -18,8 +18,8 @@ func Load() Config {
 	return Config{
 		AppEnv:   getenv("APP_ENV", "development"),
 		Port:     getenv("PORT", "8080"),
-		DBDriver: getenv("DB_DRIVER", "postgres"),
-		DBDSN:    os.Getenv("DB_DSN"),
+		DBDriver: getenv("DB_DRIVER", "pgx"),
+		DBDSN:    firstNonEmpty(os.Getenv("DATABASE_URL"), os.Getenv("DB_DSN")),
 		LogLevel: parseLogLevel(getenv("LOG_LEVEL", "INFO")),
 	}
 }
@@ -30,6 +30,15 @@ func getenv(key string, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func parseLogLevel(raw string) slog.Level {

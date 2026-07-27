@@ -6,6 +6,7 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("APP_ENV", "")
 	t.Setenv("PORT", "")
 	t.Setenv("DB_DRIVER", "")
+	t.Setenv("DATABASE_URL", "")
 	t.Setenv("DB_DSN", "")
 	t.Setenv("LOG_LEVEL", "")
 
@@ -17,8 +18,8 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Port != "8080" {
 		t.Fatalf("Port = %q, want 8080", cfg.Port)
 	}
-	if cfg.DBDriver != "postgres" {
-		t.Fatalf("DBDriver = %q, want postgres", cfg.DBDriver)
+	if cfg.DBDriver != "pgx" {
+		t.Fatalf("DBDriver = %q, want pgx", cfg.DBDriver)
 	}
 	if cfg.DBDSN != "" {
 		t.Fatalf("DBDSN = %q, want empty", cfg.DBDSN)
@@ -32,6 +33,7 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv("APP_ENV", "test")
 	t.Setenv("PORT", "9999")
 	t.Setenv("DB_DRIVER", "sqlite3")
+	t.Setenv("DATABASE_URL", "")
 	t.Setenv("DB_DSN", "file:test.db")
 	t.Setenv("LOG_LEVEL", "debug")
 
@@ -51,5 +53,16 @@ func TestLoadOverrides(t *testing.T) {
 	}
 	if cfg.LogLevel.String() != "DEBUG" {
 		t.Fatalf("LogLevel = %s, want DEBUG", cfg.LogLevel.String())
+	}
+}
+
+func TestLoadPrefersDatabaseURL(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://circle:circle@localhost:5432/circle?sslmode=disable")
+	t.Setenv("DB_DSN", "ignored")
+
+	cfg := Load()
+
+	if cfg.DBDSN != "postgres://circle:circle@localhost:5432/circle?sslmode=disable" {
+		t.Fatalf("DBDSN = %q, want DATABASE_URL value", cfg.DBDSN)
 	}
 }
