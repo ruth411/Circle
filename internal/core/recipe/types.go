@@ -14,6 +14,7 @@ const (
 )
 
 type RecipeLine struct {
+	LineNumber int
 	TargetType LineTargetType
 	TargetID   string
 	Quantity   float64
@@ -27,6 +28,8 @@ type Recipe struct {
 	Name       string
 	YieldCount float64
 	Lines      []RecipeLine
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 type IngredientDelta struct {

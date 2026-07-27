@@ -39,6 +39,8 @@ func TestProjectMigrationsIncludePhase1Tables(t *testing.T) {
 		"CREATE TABLE IF NOT EXISTS ingredient.ingredients",
 		"CREATE TABLE IF NOT EXISTS ingredient.ingredient_units",
 		"CREATE TABLE IF NOT EXISTS ingredient.ingredient_yield_factors",
+		"CREATE TABLE IF NOT EXISTS recipe.recipes",
+		"CREATE TABLE IF NOT EXISTS recipe.recipe_lines",
 		"ALTER COLUMN location_id DROP NOT NULL",
 	}
 

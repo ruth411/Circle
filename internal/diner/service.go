@@ -3,6 +3,7 @@ package diner
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -13,6 +14,11 @@ import (
 )
 
 const TokenTTL = 24 * time.Hour
+
+var (
+	ErrClaimAlreadyExists = errors.New("claim already exists")
+	ErrClaimNotFound      = errors.New("claim not found")
+)
 
 type PublicOrderItem struct {
 	ItemID string
@@ -57,6 +63,8 @@ func (s *Service) IssueToken(order contracts.ClosedOrder) (ReceiptToken, error) 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	s.purgeExpiredLocked()
+
 	raw := make([]byte, 18)
 	if _, err := io.ReadFull(s.rand, raw); err != nil {
 		return ReceiptToken{}, err
@@ -98,6 +106,8 @@ func (s *Service) ResolveToken(token string) (ReceiptToken, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	s.purgeExpiredLocked()
+
 	stored, ok := s.tokens[token]
 	if !ok {
 		return ReceiptToken{}, fmt.Errorf("token not found")
@@ -112,6 +122,43 @@ func (s *Service) SubmitClaim(claimID string, token string, selectedItemIDs []st
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	s.purgeExpiredLocked()
+
+	if claimID != "" {
+		if _, ok := s.claims[claimID]; ok {
+			return Claim{}, ErrClaimAlreadyExists
+		}
+	}
+
+	if claimID == "" {
+		var err error
+		claimID, err = s.newOpaqueID()
+		if err != nil {
+			return Claim{}, err
+		}
+	}
+
+	return s.storeClaimLocked(claimID, token, selectedItemIDs)
+}
+
+func (s *Service) ReviseClaim(claimID string, token string, selectedItemIDs []string) (Claim, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.purgeExpiredLocked()
+
+	existing, ok := s.claims[claimID]
+	if !ok {
+		return Claim{}, ErrClaimNotFound
+	}
+	if existing.Token != token {
+		return Claim{}, fmt.Errorf("claim %s belongs to a different token", claimID)
+	}
+
+	return s.storeClaimLocked(claimID, token, selectedItemIDs)
+}
+
+func (s *Service) storeClaimLocked(claimID string, token string, selectedItemIDs []string) (Claim, error) {
 	stored, ok := s.tokens[token]
 	if !ok {
 		return Claim{}, fmt.Errorf("token not found")
@@ -142,10 +189,6 @@ func (s *Service) SubmitClaim(claimID string, token string, selectedItemIDs []st
 		}
 	}
 
-	if existing, ok := s.claims[claimID]; ok && existing.Token != token {
-		return Claim{}, fmt.Errorf("claim %s belongs to a different token", claimID)
-	}
-
 	claim := Claim{
 		ID:              claimID,
 		Token:           token,
@@ -155,6 +198,35 @@ func (s *Service) SubmitClaim(claimID string, token string, selectedItemIDs []st
 	}
 	s.claims[claimID] = claim
 	return claim, nil
+}
+
+func (s *Service) purgeExpiredLocked() {
+	now := s.now()
+	expiredTokens := map[string]bool{}
+	for token, stored := range s.tokens {
+		if now.After(stored.ExpiresAt) {
+			delete(s.tokens, token)
+			expiredTokens[token] = true
+		}
+	}
+
+	if len(expiredTokens) == 0 {
+		return
+	}
+
+	for claimID, claim := range s.claims {
+		if expiredTokens[claim.Token] {
+			delete(s.claims, claimID)
+		}
+	}
+}
+
+func (s *Service) newOpaqueID() (string, error) {
+	raw := make([]byte, 12)
+	if _, err := io.ReadFull(s.rand, raw); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
 }
 
 func cloneToken(token ReceiptToken) ReceiptToken {

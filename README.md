@@ -92,16 +92,10 @@ export DATABASE_URL='postgres://postgres:postgres@localhost:5432/circle?sslmode=
 go run ./cmd/circle
 ```
 
-For the seeded Chipotle demo ingredient routes, use a staff location header and
-one of the seeded dev sessions:
+Ingredient routes require a valid staff session plus the matching
+`X-Location-Id` header.
 
-- `X-Location-Id: loc-chipotle-charlotte`
-- `X-Session-Id: session-chipotle-charlotte-dev`
-
-or:
-
-- `X-Location-Id: loc-chipotle-raleigh`
-- `X-Session-Id: session-chipotle-raleigh-dev`
+No long-lived dev sessions are seeded by migrations.
 
 ## Suggested build order
 

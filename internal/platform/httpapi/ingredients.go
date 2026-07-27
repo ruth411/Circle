@@ -3,11 +3,16 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 
 	"github.com/ruth411/circle/internal/core/ingredient"
 	"github.com/ruth411/circle/internal/tenancy"
 )
+
+const maxIngredientRequestBodyBytes int64 = 1 << 20
+
+var errRequestBodyTooLarge = errors.New("request body too large")
 
 type ingredientDependencies struct {
 	service              *ingredient.Service
@@ -97,8 +102,8 @@ func registerIngredientRoutes(mux *http.ServeMux, deps ingredientDependencies) {
 
 	mux.Handle("POST /ingredients", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var payload ingredientRequest
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			WriteError(w, r, http.StatusBadRequest, "invalid_json", "request body must be valid json")
+		if err := decodeIngredientRequest(w, r, &payload); err != nil {
+			writeIngredientDecodeError(w, r, err)
 			return
 		}
 
@@ -117,8 +122,8 @@ func registerIngredientRoutes(mux *http.ServeMux, deps ingredientDependencies) {
 
 	mux.Handle("PUT /ingredients/{id}", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var payload ingredientRequest
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			WriteError(w, r, http.StatusBadRequest, "invalid_json", "request body must be valid json")
+		if err := decodeIngredientRequest(w, r, &payload); err != nil {
+			writeIngredientDecodeError(w, r, err)
 			return
 		}
 
@@ -205,4 +210,32 @@ func writeIngredientError(w http.ResponseWriter, r *http.Request, err error) {
 	default:
 		WriteError(w, r, http.StatusInternalServerError, "internal_error", "internal server error")
 	}
+}
+
+func decodeIngredientRequest(w http.ResponseWriter, r *http.Request, payload *ingredientRequest) error {
+	r.Body = http.MaxBytesReader(w, r.Body, maxIngredientRequestBodyBytes)
+
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(payload); err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			return errRequestBodyTooLarge
+		}
+		return err
+	}
+
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return errors.New("request body must contain a single json object")
+	}
+
+	return nil
+}
+
+func writeIngredientDecodeError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, errRequestBodyTooLarge) {
+		WriteError(w, r, http.StatusRequestEntityTooLarge, "request_too_large", "request body exceeds the 1 MiB limit")
+		return
+	}
+	WriteError(w, r, http.StatusBadRequest, "invalid_json", "request body must be valid json")
 }

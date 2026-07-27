@@ -1,6 +1,7 @@
 package diner
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -27,17 +28,20 @@ func TestClaimCanBeRevisedWithoutChangingOrder(t *testing.T) {
 		t.Fatalf("IssueToken returned error: %v", err)
 	}
 
-	claim, err := service.SubmitClaim("claim-1", token.Token, []string{"line-1"})
+	claim, err := service.SubmitClaim("", token.Token, []string{"line-1"})
 	if err != nil {
 		t.Fatalf("SubmitClaim returned error: %v", err)
+	}
+	if claim.ID == "" {
+		t.Fatal("claim id empty, want generated id")
 	}
 	if claim.Totals.Calories != 600 {
 		t.Fatalf("claim calories = %v, want 600", claim.Totals.Calories)
 	}
 
-	claim, err = service.SubmitClaim("claim-1", token.Token, []string{"line-1", "line-2"})
+	claim, err = service.ReviseClaim(claim.ID, token.Token, []string{"line-1", "line-2"})
 	if err != nil {
-		t.Fatalf("SubmitClaim revision returned error: %v", err)
+		t.Fatalf("ReviseClaim returned error: %v", err)
 	}
 	if claim.Totals.Calories != 800 {
 		t.Fatalf("revised claim calories = %v, want 800", claim.Totals.Calories)
@@ -101,5 +105,54 @@ func TestClaimCanSplitMultiQuantityLineAcrossDiners(t *testing.T) {
 	}
 	if claim.Totals.Calories != 300 {
 		t.Fatalf("claim calories = %v, want 300", claim.Totals.Calories)
+	}
+}
+
+func TestSubmitClaimRejectsClaimIDReuse(t *testing.T) {
+	service := NewService()
+	now := time.Date(2026, 7, 22, 9, 0, 0, 0, time.UTC)
+	service.now = func() time.Time { return now }
+
+	token, err := service.IssueToken(contracts.ClosedOrder{
+		OrderID:  "order-1",
+		ClosedAt: now,
+		Lines:    []contracts.ClosedOrderLine{{LineID: "line-1", Name: "Bowl", Quantity: 1}},
+	})
+	if err != nil {
+		t.Fatalf("IssueToken returned error: %v", err)
+	}
+
+	if _, err := service.SubmitClaim("claim-1", token.Token, []string{"line-1"}); err != nil {
+		t.Fatalf("first SubmitClaim returned error: %v", err)
+	}
+	if _, err := service.SubmitClaim("claim-1", token.Token, []string{"line-1"}); !errors.Is(err, ErrClaimAlreadyExists) {
+		t.Fatalf("err = %v, want ErrClaimAlreadyExists", err)
+	}
+}
+
+func TestExpiredTokenPurgesClaims(t *testing.T) {
+	service := NewService()
+	now := time.Date(2026, 7, 22, 9, 0, 0, 0, time.UTC)
+	service.now = func() time.Time { return now }
+
+	token, err := service.IssueToken(contracts.ClosedOrder{
+		OrderID:  "order-1",
+		ClosedAt: now,
+		Lines:    []contracts.ClosedOrderLine{{LineID: "line-1", Name: "Bowl", Quantity: 1}},
+	})
+	if err != nil {
+		t.Fatalf("IssueToken returned error: %v", err)
+	}
+	claim, err := service.SubmitClaim("", token.Token, []string{"line-1"})
+	if err != nil {
+		t.Fatalf("SubmitClaim returned error: %v", err)
+	}
+
+	service.now = func() time.Time { return now.Add(25 * time.Hour) }
+	if _, err := service.ResolveToken(token.Token); err == nil {
+		t.Fatal("expected token to expire")
+	}
+	if _, ok := service.claims[claim.ID]; ok {
+		t.Fatal("expired claim still present, want purged")
 	}
 }
