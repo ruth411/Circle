@@ -12,7 +12,9 @@ import (
 	"log/slog"
 
 	"github.com/ruth411/circle/internal/core/ingredient"
+	"github.com/ruth411/circle/internal/core/recipe"
 	"github.com/ruth411/circle/internal/identity"
+	"github.com/ruth411/circle/internal/ordering"
 	"github.com/ruth411/circle/internal/platform/config"
 	"github.com/ruth411/circle/internal/platform/db"
 	"github.com/ruth411/circle/internal/platform/httpapi"
@@ -62,12 +64,15 @@ func main() {
 
 	addr := ":" + cfg.Port
 	ingredientService := ingredient.NewService(ingredient.NewSQLRepository(database))
+	recipeRepository := recipe.NewSQLRepository(database)
+	orderingService := ordering.NewServiceWithDependencies(ordering.NewSQLRepository(database), recipeRepository, ordering.MockProvider{})
 	sessionValidator := identity.NewSQLSessionValidator(database)
 
 	server := &http.Server{
 		Addr: addr,
 		Handler: httpapi.NewServerWithDependencies(logger, httpapi.Dependencies{
 			IngredientService:    ingredientService,
+			OrderingService:      orderingService,
 			SessionValidator:     sessionValidator,
 			OrganizationResolver: tenancy.NewSQLOrganizationResolver(database),
 		}),

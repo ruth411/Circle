@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/ruth411/circle/internal/tenancy"
 )
 
 func TestHealthzReturnsJSONAndRequestID(t *testing.T) {
@@ -59,6 +61,27 @@ func TestUnknownRouteReturnsJSONError(t *testing.T) {
 	}
 	if payload.Error.RequestID == "" {
 		t.Fatal("request_id empty, want generated id")
+	}
+}
+
+func TestMethodMismatchReturnsServeMux405(t *testing.T) {
+	server := NewServerWithDependencies(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		OrderingService:      seedOrderingService(),
+		SessionValidator:     seedSessionService(t, "loc-1"),
+		OrganizationResolver: tenancy.StaticOrganizationResolver{"loc-1": "org-1"},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/orders", nil)
+	req.Header.Set("X-Location-Id", "loc-1")
+	req.Header.Set(sessionIDHeader, "session-1")
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405, body = %s", recorder.Code, recorder.Body.String())
+	}
+	if allow := recorder.Header().Get("Allow"); allow != http.MethodPost {
+		t.Fatalf("Allow = %q, want %q", allow, http.MethodPost)
 	}
 }
 

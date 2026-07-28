@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ruth411/circle/internal/core/ingredient"
+	"github.com/ruth411/circle/internal/ordering"
 	"github.com/ruth411/circle/internal/tenancy"
 )
 
@@ -34,6 +36,7 @@ func NewServer(logger *slog.Logger) http.Handler {
 
 type Dependencies struct {
 	IngredientService    *ingredient.Service
+	OrderingService      *ordering.Service
 	SessionValidator     SessionValidator
 	LocationResolver     tenancy.Resolver
 	OrganizationResolver tenancy.OrganizationResolver
@@ -49,19 +52,13 @@ func NewServerWithDependencies(logger *slog.Logger, deps Dependencies) http.Hand
 		organizationResolver: deps.OrganizationResolver,
 		sessionValidator:     deps.SessionValidator,
 	})
-	return withRecover(logger, withRequestID(withLogging(logger, jsonRoutes(mux))))
-}
-
-func jsonRoutes(mux *http.ServeMux) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handler, pattern := mux.Handler(r)
-		if pattern == "" {
-			WriteError(w, r, http.StatusNotFound, "not_found", "route not found")
-			return
-		}
-
-		handler.ServeHTTP(w, r)
+	registerOrderingRoutes(mux, orderingDependencies{
+		service:              deps.OrderingService,
+		locationResolver:     deps.LocationResolver,
+		organizationResolver: deps.OrganizationResolver,
+		sessionValidator:     deps.SessionValidator,
 	})
+	return withRecover(logger, withRequestID(withLogging(logger, withJSONNotFound(mux))))
 }
 
 func healthz(w http.ResponseWriter, r *http.Request) {
@@ -132,6 +129,24 @@ func withRecover(logger *slog.Logger, next http.Handler) http.Handler {
 	})
 }
 
+func withJSONNotFound(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		recorder := &bufferedResponseWriter{
+			header: make(http.Header),
+			status: http.StatusOK,
+		}
+		next.ServeHTTP(recorder, r)
+		if recorder.status == http.StatusNotFound {
+			WriteError(w, r, http.StatusNotFound, "not_found", "route not found")
+			return
+		}
+
+		copyHeaders(w.Header(), recorder.header)
+		w.WriteHeader(recorder.status)
+		_, _ = w.Write(recorder.body.Bytes())
+	})
+}
+
 func RequestID(ctx context.Context) string {
 	value, _ := ctx.Value(requestIDKey).(string)
 	return value
@@ -144,6 +159,32 @@ func newRequestID() string {
 	}
 
 	return base64.RawURLEncoding.EncodeToString(raw)
+}
+
+func copyHeaders(dst http.Header, src http.Header) {
+	for key, values := range src {
+		for _, value := range values {
+			dst.Add(key, value)
+		}
+	}
+}
+
+type bufferedResponseWriter struct {
+	header http.Header
+	body   bytes.Buffer
+	status int
+}
+
+func (w *bufferedResponseWriter) Header() http.Header {
+	return w.header
+}
+
+func (w *bufferedResponseWriter) WriteHeader(status int) {
+	w.status = status
+}
+
+func (w *bufferedResponseWriter) Write(p []byte) (int, error) {
+	return w.body.Write(p)
 }
 
 type statusRecorder struct {

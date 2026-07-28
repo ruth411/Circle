@@ -531,6 +531,28 @@ WHERE location_id = $1
 	return snapshot, nil
 }
 
+func getSnapshotByID(ctx context.Context, db sqlQueryer, snapshotID string) (MenuSnapshot, error) {
+	var snapshot MenuSnapshot
+	err := db.QueryRowContext(ctx, `
+SELECT id, location_id, version, created_at
+FROM recipe.menu_snapshots
+WHERE id = $1;
+`, snapshotID).Scan(&snapshot.ID, &snapshot.LocationID, &snapshot.Version, &snapshot.CreatedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return MenuSnapshot{}, ErrSnapshotNotFound
+		}
+		return MenuSnapshot{}, err
+	}
+
+	items, err := loadSnapshotItems(ctx, db, snapshot.ID)
+	if err != nil {
+		return MenuSnapshot{}, err
+	}
+	snapshot.Items = items
+	return snapshot, nil
+}
+
 func loadSnapshotItems(ctx context.Context, db sqlQueryer, snapshotID string) ([]SnapshotItem, error) {
 	rows, err := db.QueryContext(ctx, `
 SELECT menu_item_id, name, description, price_minor, currency, calories, protein_grams, carbs_grams, fat_grams, ingredient_usage_json

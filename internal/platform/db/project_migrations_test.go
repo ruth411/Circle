@@ -51,6 +51,11 @@ func TestProjectMigrationsIncludePhase1Tables(t *testing.T) {
 		"CREATE TABLE IF NOT EXISTS recipe.menu_snapshot_modifiers",
 		"CREATE OR REPLACE FUNCTION recipe.prevent_snapshot_mutation()",
 		"ADD CONSTRAINT recipe_menu_items_location_recipe_fk",
+		"CREATE TABLE IF NOT EXISTS ordering.orders",
+		"CREATE TABLE IF NOT EXISTS ordering.order_lines",
+		"CREATE TABLE IF NOT EXISTS ordering.order_line_modifiers",
+		"CREATE TABLE IF NOT EXISTS ordering.checks",
+		"CREATE TABLE IF NOT EXISTS ordering.tenders",
 		"ALTER COLUMN location_id DROP NOT NULL",
 	}
 
