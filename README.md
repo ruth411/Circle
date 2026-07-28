@@ -1,4 +1,4 @@
-•⁠  ⁠# Circle
+⁠# Circle
 
   Circle is a restaurant operating system with *macro nutrition built into the core data model*.
 
