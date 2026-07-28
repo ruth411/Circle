@@ -59,6 +59,7 @@ type ModifierGroup struct {
 }
 
 type MenuItem struct {
+	LocationID     string
 	ID             string
 	RecipeID       string
 	Name           string
@@ -66,6 +67,8 @@ type MenuItem struct {
 	PriceMinor     int64
 	Currency       string
 	ModifierGroups []ModifierGroup
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 type SnapshotModifier struct {

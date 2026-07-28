@@ -19,7 +19,7 @@ func NewSQLSessionValidator(db *sql.DB) *SQLSessionValidator {
 	}
 }
 
-func (s *SQLSessionValidator) ValidateSession(sessionID string) (Session, error) {
+func (s *SQLSessionValidator) ValidateSession(ctx context.Context, sessionID string) (Session, error) {
 	const query = `
 SELECT
     sessions.id,
@@ -42,7 +42,7 @@ WHERE sessions.id = $1;
 	var scopeType string
 	var locationID sql.NullString
 	var active bool
-	err := s.db.QueryRowContext(context.Background(), query, sessionID).Scan(
+	err := s.db.QueryRowContext(ctx, query, sessionID).Scan(
 		&session.ID,
 		&session.UserID,
 		&organizationID,

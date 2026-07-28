@@ -41,6 +41,16 @@ func TestProjectMigrationsIncludePhase1Tables(t *testing.T) {
 		"CREATE TABLE IF NOT EXISTS ingredient.ingredient_yield_factors",
 		"CREATE TABLE IF NOT EXISTS recipe.recipes",
 		"CREATE TABLE IF NOT EXISTS recipe.recipe_lines",
+		"CREATE TABLE IF NOT EXISTS recipe.menu_items",
+		"CREATE TABLE IF NOT EXISTS recipe.modifier_groups",
+		"CREATE TABLE IF NOT EXISTS recipe.modifiers",
+		"CREATE TABLE IF NOT EXISTS recipe.modifier_ingredient_deltas",
+		"CREATE TABLE IF NOT EXISTS recipe.menu_snapshots",
+		"CREATE TABLE IF NOT EXISTS recipe.menu_snapshot_items",
+		"CREATE TABLE IF NOT EXISTS recipe.menu_snapshot_modifier_groups",
+		"CREATE TABLE IF NOT EXISTS recipe.menu_snapshot_modifiers",
+		"CREATE OR REPLACE FUNCTION recipe.prevent_snapshot_mutation()",
+		"ADD CONSTRAINT recipe_menu_items_location_recipe_fk",
 		"ALTER COLUMN location_id DROP NOT NULL",
 	}
 
