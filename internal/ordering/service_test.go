@@ -2,14 +2,17 @@ package ordering
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ruth411/circle/internal/contracts"
 	"github.com/ruth411/circle/internal/core/ingredient"
 	"github.com/ruth411/circle/internal/core/recipe"
 	"github.com/ruth411/circle/internal/platform/biztime"
+	"github.com/ruth411/circle/internal/platform/events"
 )
 
 func TestOrderLifecycleFreezesPaidOrder(t *testing.T) {
@@ -126,6 +129,7 @@ func TestCloseCheckMarksOrderClosingDuringPayment(t *testing.T) {
 				Currency:        "USD",
 				Macros:          ingredient.MacroValues{Calories: 500},
 				IngredientUsage: map[string]float64{"chicken": 150},
+				IngredientUnits: map[string]ingredient.Unit{"chicken": ingredient.UnitGram},
 			},
 		},
 	}); err != nil {
@@ -194,6 +198,7 @@ func TestCloseCheckReopensOrderOnPaymentFailure(t *testing.T) {
 				Currency:        "USD",
 				Macros:          ingredient.MacroValues{Calories: 500},
 				IngredientUsage: map[string]float64{"chicken": 150},
+				IngredientUnits: map[string]ingredient.Unit{"chicken": ingredient.UnitGram},
 			},
 		},
 	}); err != nil {
@@ -294,6 +299,7 @@ func TestCloseCheckFinishesChargedOrderOnRetryWithoutRecharging(t *testing.T) {
 				Currency:        "USD",
 				Macros:          ingredient.MacroValues{Calories: 500},
 				IngredientUsage: map[string]float64{"chicken": 150},
+				IngredientUnits: map[string]ingredient.Unit{"chicken": ingredient.UnitGram},
 			},
 		},
 	}); err != nil {
@@ -374,6 +380,7 @@ func TestCloseCheckRecoversWhenTenderSuccessWriteFailsOnce(t *testing.T) {
 				Currency:        "USD",
 				Macros:          ingredient.MacroValues{Calories: 500},
 				IngredientUsage: map[string]float64{"chicken": 150},
+				IngredientUnits: map[string]ingredient.Unit{"chicken": ingredient.UnitGram},
 			},
 		},
 	}); err != nil {
@@ -467,6 +474,7 @@ func TestCloseCheckSurfacesRollbackFailureAfterPaymentFailure(t *testing.T) {
 				Currency:        "USD",
 				Macros:          ingredient.MacroValues{Calories: 500},
 				IngredientUsage: map[string]float64{"chicken": 150},
+				IngredientUnits: map[string]ingredient.Unit{"chicken": ingredient.UnitGram},
 			},
 		},
 	}); err != nil {
@@ -483,13 +491,17 @@ func TestCloseCheckSurfacesRollbackFailureAfterPaymentFailure(t *testing.T) {
 		t.Fatalf("CreateOrder returned error: %v", err)
 	}
 
-	if _, err := service.AddLine(context.Background(), AddLineInput{
+	line, err := service.AddLine(context.Background(), AddLineInput{
 		LocationID: "loc-1",
 		OrderID:    order.ID,
 		MenuItemID: "bowl",
 		Quantity:   1,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("AddLine returned error: %v", err)
+	}
+	if got := line.IngredientUnits["chicken"]; got != ingredient.UnitGram {
+		t.Fatalf("line chicken unit = %s, want g", got)
 	}
 
 	_, err = service.CloseCheck(context.Background(), CloseCheckInput{
@@ -732,6 +744,87 @@ func TestAddLineRejectsDuplicateLineID(t *testing.T) {
 	})
 	if !errors.Is(err, ErrInvalidOrder) {
 		t.Fatalf("expected duplicate line id to return invalid order, got %v", err)
+	}
+}
+
+func TestCloseCheckEmitsClosedOrderEvent(t *testing.T) {
+	outbox := &events.MemoryOutbox{}
+	service := NewServiceWithDependencies(newMemoryRepositoryWithOutbox(outbox), newMemorySnapshotStore(), MockProvider{})
+	if err := service.RegisterSnapshot(recipe.MenuSnapshot{
+		ID:         "snap-1",
+		LocationID: "loc-1",
+		Version:    1,
+		Items: []recipe.SnapshotItem{
+			{
+				MenuItemID:      "bowl",
+				Name:            "Bowl",
+				PriceMinor:      1200,
+				Currency:        "USD",
+				Macros:          ingredient.MacroValues{Calories: 500},
+				IngredientUsage: map[string]float64{"chicken": 150},
+				IngredientUnits: map[string]ingredient.Unit{"chicken": ingredient.UnitGram},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("RegisterSnapshot returned error: %v", err)
+	}
+
+	order, err := service.CreateOrder(context.Background(), CreateOrderInput{
+		OrderID:      "order-1",
+		LocationID:   "loc-1",
+		SnapshotID:   "snap-1",
+		BusinessDate: biztime.BusinessDate("2026-07-22"),
+	})
+	if err != nil {
+		t.Fatalf("CreateOrder returned error: %v", err)
+	}
+	line, err := service.AddLine(context.Background(), AddLineInput{
+		LocationID: "loc-1",
+		OrderID:    order.ID,
+		MenuItemID: "bowl",
+		Quantity:   1,
+	})
+	if err != nil {
+		t.Fatalf("AddLine returned error: %v", err)
+	}
+	if got := line.IngredientUnits["chicken"]; got != ingredient.UnitGram {
+		t.Fatalf("line chicken unit = %s, want g", got)
+	}
+
+	if _, err := service.CloseCheck(context.Background(), CloseCheckInput{
+		LocationID: "loc-1",
+		OrderID:    order.ID,
+		Tender: Tender{
+			ID:          "tender-1",
+			CheckID:     order.CheckID,
+			AmountMinor: 1200,
+			Currency:    "USD",
+			Kind:        "mock",
+		},
+	}); err != nil {
+		t.Fatalf("CloseCheck returned error: %v", err)
+	}
+
+	recorded := outbox.Events()
+	if len(recorded) != 1 {
+		t.Fatalf("event count = %d, want 1", len(recorded))
+	}
+	if recorded[0].Name != contracts.ClosedOrderEventName {
+		t.Fatalf("event name = %q, want %q", recorded[0].Name, contracts.ClosedOrderEventName)
+	}
+
+	var payload contracts.ClosedOrder
+	if err := json.Unmarshal(recorded[0].Payload, &payload); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+	if payload.OrderID != order.ID {
+		t.Fatalf("payload order id = %q, want %q", payload.OrderID, order.ID)
+	}
+	if payload.LocationID != "loc-1" {
+		t.Fatalf("payload location id = %q, want loc-1", payload.LocationID)
+	}
+	if got := payload.Lines[0].IngredientUnits["chicken"]; got != ingredient.UnitGram {
+		t.Fatalf("payload chicken unit = %s, want g", got)
 	}
 }
 

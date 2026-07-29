@@ -437,6 +437,10 @@ func insertSnapshotItems(ctx context.Context, db sqlQueryer, snapshot MenuSnapsh
 		if err != nil {
 			return err
 		}
+		unitsJSON, err := json.Marshal(item.IngredientUnits)
+		if err != nil {
+			return err
+		}
 		if _, err := db.ExecContext(ctx, `
 INSERT INTO recipe.menu_snapshot_items (
     snapshot_id,
@@ -449,10 +453,11 @@ INSERT INTO recipe.menu_snapshot_items (
     protein_grams,
     carbs_grams,
     fat_grams,
-    ingredient_usage_json
+    ingredient_usage_json,
+    ingredient_units_json
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11);
-`, snapshot.ID, item.MenuItemID, item.Name, item.Description, item.PriceMinor, item.Currency, item.Macros.Calories, item.Macros.ProteinGrams, item.Macros.CarbsGrams, item.Macros.FatGrams, usageJSON); err != nil {
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12);
+`, snapshot.ID, item.MenuItemID, item.Name, item.Description, item.PriceMinor, item.Currency, item.Macros.Calories, item.Macros.ProteinGrams, item.Macros.CarbsGrams, item.Macros.FatGrams, usageJSON, unitsJSON); err != nil {
 			return err
 		}
 
@@ -483,6 +488,10 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9);
 				if err != nil {
 					return err
 				}
+				unitsJSON, err := json.Marshal(modifier.IngredientUnits)
+				if err != nil {
+					return err
+				}
 				if _, err := db.ExecContext(ctx, `
 INSERT INTO recipe.menu_snapshot_modifiers (
     snapshot_id,
@@ -495,10 +504,11 @@ INSERT INTO recipe.menu_snapshot_modifiers (
     protein_grams,
     carbs_grams,
     fat_grams,
-    ingredient_usage_json
+    ingredient_usage_json,
+    ingredient_units_json
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11);
-`, snapshot.ID, group.GroupID, modifier.ModifierID, modifier.Name, modifier.PriceDeltaMinor, modifier.Currency, modifier.MacroDelta.Calories, modifier.MacroDelta.ProteinGrams, modifier.MacroDelta.CarbsGrams, modifier.MacroDelta.FatGrams, usageJSON); err != nil {
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12);
+`, snapshot.ID, group.GroupID, modifier.ModifierID, modifier.Name, modifier.PriceDeltaMinor, modifier.Currency, modifier.MacroDelta.Calories, modifier.MacroDelta.ProteinGrams, modifier.MacroDelta.CarbsGrams, modifier.MacroDelta.FatGrams, usageJSON, unitsJSON); err != nil {
 					return err
 				}
 			}
@@ -555,7 +565,7 @@ WHERE id = $1;
 
 func loadSnapshotItems(ctx context.Context, db sqlQueryer, snapshotID string) ([]SnapshotItem, error) {
 	rows, err := db.QueryContext(ctx, `
-SELECT menu_item_id, name, description, price_minor, currency, calories, protein_grams, carbs_grams, fat_grams, ingredient_usage_json
+SELECT menu_item_id, name, description, price_minor, currency, calories, protein_grams, carbs_grams, fat_grams, ingredient_usage_json, ingredient_units_json
 FROM recipe.menu_snapshot_items
 WHERE snapshot_id = $1
 ORDER BY name, menu_item_id;
@@ -569,10 +579,14 @@ ORDER BY name, menu_item_id;
 	for rows.Next() {
 		var item SnapshotItem
 		var usageRaw []byte
-		if err := rows.Scan(&item.MenuItemID, &item.Name, &item.Description, &item.PriceMinor, &item.Currency, &item.Macros.Calories, &item.Macros.ProteinGrams, &item.Macros.CarbsGrams, &item.Macros.FatGrams, &usageRaw); err != nil {
+		var unitsRaw []byte
+		if err := rows.Scan(&item.MenuItemID, &item.Name, &item.Description, &item.PriceMinor, &item.Currency, &item.Macros.Calories, &item.Macros.ProteinGrams, &item.Macros.CarbsGrams, &item.Macros.FatGrams, &usageRaw, &unitsRaw); err != nil {
 			return nil, err
 		}
 		if err := decodeIngredientUsage(usageRaw, &item.IngredientUsage); err != nil {
+			return nil, err
+		}
+		if err := decodeIngredientUnits(unitsRaw, &item.IngredientUnits); err != nil {
 			return nil, err
 		}
 		groups, err := loadSnapshotModifierGroups(ctx, db, snapshotID, item.MenuItemID)
@@ -622,7 +636,7 @@ ORDER BY name, group_id;
 
 func loadSnapshotModifiers(ctx context.Context, db sqlQueryer, snapshotID string, groupID string) ([]SnapshotModifier, error) {
 	rows, err := db.QueryContext(ctx, `
-SELECT modifier_id, name, price_delta_minor, currency, calories, protein_grams, carbs_grams, fat_grams, ingredient_usage_json
+SELECT modifier_id, name, price_delta_minor, currency, calories, protein_grams, carbs_grams, fat_grams, ingredient_usage_json, ingredient_units_json
 FROM recipe.menu_snapshot_modifiers
 WHERE snapshot_id = $1
   AND group_id = $2
@@ -637,10 +651,14 @@ ORDER BY name, modifier_id;
 	for rows.Next() {
 		var modifier SnapshotModifier
 		var usageRaw []byte
-		if err := rows.Scan(&modifier.ModifierID, &modifier.Name, &modifier.PriceDeltaMinor, &modifier.Currency, &modifier.MacroDelta.Calories, &modifier.MacroDelta.ProteinGrams, &modifier.MacroDelta.CarbsGrams, &modifier.MacroDelta.FatGrams, &usageRaw); err != nil {
+		var unitsRaw []byte
+		if err := rows.Scan(&modifier.ModifierID, &modifier.Name, &modifier.PriceDeltaMinor, &modifier.Currency, &modifier.MacroDelta.Calories, &modifier.MacroDelta.ProteinGrams, &modifier.MacroDelta.CarbsGrams, &modifier.MacroDelta.FatGrams, &usageRaw, &unitsRaw); err != nil {
 			return nil, err
 		}
 		if err := decodeIngredientUsage(usageRaw, &modifier.IngredientUsage); err != nil {
+			return nil, err
+		}
+		if err := decodeIngredientUnits(unitsRaw, &modifier.IngredientUnits); err != nil {
 			return nil, err
 		}
 		modifiers = append(modifiers, modifier)
@@ -658,6 +676,14 @@ func decodeStringSlice(raw []byte, out *[]string) error {
 }
 
 func decodeIngredientUsage(raw []byte, out *map[string]float64) error {
+	if len(raw) == 0 {
+		*out = nil
+		return nil
+	}
+	return json.Unmarshal(raw, out)
+}
+
+func decodeIngredientUnits(raw []byte, out *map[string]ingredient.Unit) error {
 	if len(raw) == 0 {
 		*out = nil
 		return nil

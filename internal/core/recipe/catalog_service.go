@@ -34,11 +34,13 @@ type SnapshotResolver interface {
 type ResolvedRecipeData struct {
 	Macros          ingredient.MacroValues
 	IngredientUsage map[string]float64
+	IngredientUnits map[string]ingredient.Unit
 }
 
 type ResolvedModifierData struct {
 	MacroDelta      ingredient.MacroValues
 	IngredientUsage map[string]float64
+	IngredientUnits map[string]ingredient.Unit
 }
 
 type CatalogService struct {
@@ -143,6 +145,7 @@ func (s *CatalogService) GenerateSnapshot(ctx context.Context, input GenerateSna
 					Currency:        modifier.Currency,
 					MacroDelta:      resolvedModifier.MacroDelta,
 					IngredientUsage: cloneIngredientUsage(resolvedModifier.IngredientUsage),
+					IngredientUnits: cloneIngredientUnits(resolvedModifier.IngredientUnits),
 				}
 			}
 
@@ -166,6 +169,7 @@ func (s *CatalogService) GenerateSnapshot(ctx context.Context, input GenerateSna
 			Currency:        item.Currency,
 			Macros:          resolvedRecipe.Macros,
 			IngredientUsage: cloneIngredientUsage(resolvedRecipe.IngredientUsage),
+			IngredientUnits: cloneIngredientUnits(resolvedRecipe.IngredientUnits),
 			ModifierGroups:  groupSnapshots,
 		}
 	}
@@ -419,6 +423,18 @@ func cloneIngredientUsage(values map[string]float64) map[string]float64 {
 	out := make(map[string]float64, len(values))
 	for key, value := range values {
 		out[key] = value
+	}
+	return out
+}
+
+func cloneIngredientUnits(values map[string]ingredient.Unit) map[string]ingredient.Unit {
+	if len(values) == 0 {
+		return nil
+	}
+
+	out := make(map[string]ingredient.Unit, len(values))
+	for ingredientID, unit := range values {
+		out[ingredientID] = unit
 	}
 	return out
 }

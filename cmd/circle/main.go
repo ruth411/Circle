@@ -14,9 +14,11 @@ import (
 	"github.com/ruth411/circle/internal/core/ingredient"
 	"github.com/ruth411/circle/internal/core/recipe"
 	"github.com/ruth411/circle/internal/identity"
+	"github.com/ruth411/circle/internal/inventory"
 	"github.com/ruth411/circle/internal/ordering"
 	"github.com/ruth411/circle/internal/platform/config"
 	"github.com/ruth411/circle/internal/platform/db"
+	"github.com/ruth411/circle/internal/platform/events"
 	"github.com/ruth411/circle/internal/platform/httpapi"
 	"github.com/ruth411/circle/internal/tenancy"
 	projectmigrations "github.com/ruth411/circle/migrations"
@@ -65,8 +67,13 @@ func main() {
 	addr := ":" + cfg.Port
 	ingredientService := ingredient.NewService(ingredient.NewSQLRepository(database))
 	recipeRepository := recipe.NewSQLRepository(database)
+	outbox := events.NewSQLOutbox(database)
 	orderingService := ordering.NewServiceWithDependencies(ordering.NewSQLRepository(database), recipeRepository, ordering.MockProvider{})
+	inventoryService := inventory.NewService(inventory.NewSQLRepository(database))
+	inventoryProcessor := inventory.NewProcessor(outbox, inventoryService)
 	sessionValidator := identity.NewSQLSessionValidator(database)
+
+	go runInventoryProcessor(ctx, logger, inventoryProcessor)
 
 	server := &http.Server{
 		Addr: addr,
@@ -83,5 +90,30 @@ func main() {
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("server stopped", "err", err)
 		os.Exit(1)
+	}
+}
+
+func runInventoryProcessor(ctx context.Context, logger *slog.Logger, processor *inventory.Processor) {
+	if processor == nil {
+		return
+	}
+
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			processed, err := processor.ProcessPendingClosedOrders(ctx, 100)
+			if err != nil && !errors.Is(err, context.Canceled) {
+				logger.Warn("inventory processor failed", "err", err)
+				continue
+			}
+			if processed > 0 {
+				logger.Info("inventory processor applied events", "count", processed)
+			}
+		}
 	}
 }

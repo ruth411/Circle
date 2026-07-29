@@ -26,6 +26,7 @@ type ResolvedRecipe struct {
 	TotalCostMinor      int64
 	PerServingCostMinor int64
 	IngredientUsage     map[string]float64
+	IngredientUnits     map[string]ingredient.Unit
 	Confidence          Confidence
 
 	totalCostMinorExact      float64
@@ -36,6 +37,7 @@ type ResolvedModifier struct {
 	MacroDelta      ingredient.MacroValues
 	CostDeltaMinor  int64
 	IngredientUsage map[string]float64
+	IngredientUnits map[string]ingredient.Unit
 	Confidence      Confidence
 }
 
@@ -58,6 +60,7 @@ func (c Calculator) ResolveModifier(modifier recipe.Modifier) (ResolvedModifier,
 	total := ingredient.MacroValues{}
 	totalCost := 0.0
 	usage := map[string]float64{}
+	units := map[string]ingredient.Unit{}
 
 	for _, delta := range modifier.IngredientDeltas {
 		ing, ok := c.Ingredients[delta.IngredientID]
@@ -87,6 +90,7 @@ func (c Calculator) ResolveModifier(modifier recipe.Modifier) (ResolvedModifier,
 		total = total.Add(ing.MacrosPerBaseUnit.Scale(signedQty))
 		totalCost += float64(ing.CurrentCostMinor) * signedQty
 		usage[ing.ID] += signedQty
+		units[ing.ID] = ing.BaseUnit
 
 		if ing.VerificationStatus != ingredient.VerificationVerified {
 			confidence.downgrade(ConfidenceMedium, fmt.Sprintf("ingredient %s is unverified", ing.ID))
@@ -97,6 +101,7 @@ func (c Calculator) ResolveModifier(modifier recipe.Modifier) (ResolvedModifier,
 		MacroDelta:      total,
 		CostDeltaMinor:  roundMinor(totalCost),
 		IngredientUsage: usage,
+		IngredientUnits: units,
 		Confidence:      confidence,
 	}, nil
 }
@@ -122,6 +127,7 @@ func (c Calculator) resolveRecipe(recipeID string, depth int, stack map[string]b
 	total := ingredient.MacroValues{}
 	totalCost := 0.0
 	usage := map[string]float64{}
+	units := map[string]ingredient.Unit{}
 
 	for _, line := range current.Lines {
 		switch line.TargetType {
@@ -148,6 +154,7 @@ func (c Calculator) resolveRecipe(recipeID string, depth int, stack map[string]b
 			total = total.Add(ing.MacrosPerBaseUnit.Scale(baseQty))
 			totalCost += float64(ing.CurrentCostMinor) * baseQty
 			usage[ing.ID] += baseQty
+			units[ing.ID] = ing.BaseUnit
 
 			if ing.VerificationStatus != ingredient.VerificationVerified {
 				confidence.downgrade(ConfidenceMedium, fmt.Sprintf("ingredient %s is unverified", ing.ID))
@@ -165,6 +172,7 @@ func (c Calculator) resolveRecipe(recipeID string, depth int, stack map[string]b
 			total = total.Add(child.PerServing.Scale(line.Quantity))
 			totalCost += child.perServingCostMinorExact * line.Quantity
 			mergeUsage(usage, child.IngredientUsage, line.Quantity)
+			mergeUnits(units, child.IngredientUnits)
 			confidence.merge(child.Confidence)
 		default:
 			return ResolvedRecipe{}, fmt.Errorf("unknown line target type %q", line.TargetType)
@@ -185,6 +193,7 @@ func (c Calculator) resolveRecipe(recipeID string, depth int, stack map[string]b
 		TotalCostMinor:           roundMinor(totalCost),
 		PerServingCostMinor:      roundMinor(perServingCost),
 		IngredientUsage:          usage,
+		IngredientUnits:          units,
 		Confidence:               confidence,
 		totalCostMinorExact:      totalCost,
 		perServingCostMinorExact: perServingCost,
@@ -221,6 +230,12 @@ func severity(level ConfidenceLevel) int {
 func mergeUsage(dst map[string]float64, src map[string]float64, multiplier float64) {
 	for ingredientID, qty := range src {
 		dst[ingredientID] += qty * multiplier
+	}
+}
+
+func mergeUnits(dst map[string]ingredient.Unit, src map[string]ingredient.Unit) {
+	for ingredientID, unit := range src {
+		dst[ingredientID] = unit
 	}
 }
 

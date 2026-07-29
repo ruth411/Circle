@@ -73,6 +73,7 @@ type OrderLine struct {
 	Currency           string
 	ResolvedMacros     ingredient.MacroValues
 	IngredientUsage    map[string]float64
+	IngredientUnits    map[string]ingredient.Unit
 	SelectedModifiers  []recipe.SnapshotModifier
 }
 
@@ -253,11 +254,16 @@ func (s *Service) AddLine(ctx context.Context, input AddLineInput) (OrderLine, e
 	unitPrice := item.PriceMinor
 	macros := item.Macros
 	usage := cloneUsage(item.IngredientUsage)
+	units := cloneUnits(item.IngredientUnits)
+	if units == nil {
+		units = map[string]ingredient.Unit{}
+	}
 
 	for _, modifier := range selectedModifiers {
 		unitPrice += modifier.PriceDeltaMinor
 		macros = macros.Add(modifier.MacroDelta)
 		mergeUsage(usage, modifier.IngredientUsage, 1)
+		mergeUnits(units, modifier.IngredientUnits)
 	}
 
 	line := OrderLine{
@@ -269,6 +275,7 @@ func (s *Service) AddLine(ctx context.Context, input AddLineInput) (OrderLine, e
 		Currency:           item.Currency,
 		ResolvedMacros:     macros.Scale(float64(input.Quantity)),
 		IngredientUsage:    scaleUsage(usage, float64(input.Quantity)),
+		IngredientUnits:    units,
 		SelectedModifiers:  selectedModifiers,
 	}
 
@@ -360,13 +367,15 @@ func ToClosedOrder(order Order) (contracts.ClosedOrder, error) {
 			Quantity:        line.Quantity,
 			ResolvedMacros:  line.ResolvedMacros,
 			IngredientUsage: cloneUsage(line.IngredientUsage),
+			IngredientUnits: cloneUnits(line.IngredientUnits),
 		}
 	}
 
 	return contracts.ClosedOrder{
-		OrderID:  order.ID,
-		ClosedAt: order.ClosedAt.UTC(),
-		Lines:    lines,
+		OrderID:    order.ID,
+		LocationID: order.LocationID,
+		ClosedAt:   order.ClosedAt.UTC(),
+		Lines:      lines,
 	}, nil
 }
 
@@ -475,6 +484,7 @@ func cloneOrder(order Order) Order {
 func cloneLine(line OrderLine) OrderLine {
 	out := line
 	out.IngredientUsage = cloneUsage(line.IngredientUsage)
+	out.IngredientUnits = cloneUnits(line.IngredientUnits)
 	out.SelectedModifiers = make([]recipe.SnapshotModifier, len(line.SelectedModifiers))
 	for i, modifier := range line.SelectedModifiers {
 		out.SelectedModifiers[i] = cloneModifier(modifier)
@@ -485,6 +495,7 @@ func cloneLine(line OrderLine) OrderLine {
 func cloneModifier(modifier recipe.SnapshotModifier) recipe.SnapshotModifier {
 	out := modifier
 	out.IngredientUsage = cloneUsage(modifier.IngredientUsage)
+	out.IngredientUnits = cloneUnits(modifier.IngredientUnits)
 	return out
 }
 
@@ -508,4 +519,25 @@ func scaleUsage(src map[string]float64, multiplier float64) map[string]float64 {
 		out[ingredientID] = qty * multiplier
 	}
 	return out
+}
+
+func cloneUnits(units map[string]ingredient.Unit) map[string]ingredient.Unit {
+	if len(units) == 0 {
+		return nil
+	}
+
+	out := make(map[string]ingredient.Unit, len(units))
+	for ingredientID, unit := range units {
+		out[ingredientID] = unit
+	}
+	return out
+}
+
+func mergeUnits(dst map[string]ingredient.Unit, src map[string]ingredient.Unit) {
+	if len(src) == 0 {
+		return
+	}
+	for ingredientID, unit := range src {
+		dst[ingredientID] = unit
+	}
 }

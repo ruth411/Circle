@@ -2,17 +2,21 @@ package ordering
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
 
+	"github.com/ruth411/circle/internal/contracts"
 	"github.com/ruth411/circle/internal/core/recipe"
+	"github.com/ruth411/circle/internal/platform/events"
 )
 
 type memoryRepository struct {
 	mu      sync.Mutex
 	orders  map[string]Order
 	tenders map[string]memoryTender
+	outbox  events.Appender
 }
 
 type memoryTender struct {
@@ -22,9 +26,14 @@ type memoryTender struct {
 }
 
 func newMemoryRepository() *memoryRepository {
+	return newMemoryRepositoryWithOutbox(nil)
+}
+
+func newMemoryRepositoryWithOutbox(outbox events.Appender) *memoryRepository {
 	return &memoryRepository{
 		orders:  map[string]Order{},
 		tenders: map[string]memoryTender{},
+		outbox:  outbox,
 	}
 }
 
@@ -199,6 +208,28 @@ func (r *memoryRepository) FinishClose(_ context.Context, locationID string, ord
 	order.Status = OrderStatusClosed
 	order.ClosedAt = &closedAt
 	r.orders[order.ID] = order
+
+	if r.outbox != nil {
+		closedOrder, err := ToClosedOrder(order)
+		if err != nil {
+			return Order{}, err
+		}
+		payload, err := json.Marshal(closedOrder)
+		if err != nil {
+			return Order{}, err
+		}
+		if err := r.outbox.Append(context.Background(), events.Event{
+			ID:          "evt-order-closed-" + order.LocationID + "-" + order.ID,
+			Name:        contracts.ClosedOrderEventName,
+			AggregateID: order.ID,
+			LocationID:  order.LocationID,
+			Payload:     payload,
+			OccurredAt:  closedAt,
+		}); err != nil {
+			return Order{}, err
+		}
+	}
+
 	return cloneOrder(order), nil
 }
 

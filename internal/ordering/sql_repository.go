@@ -9,8 +9,11 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/ruth411/circle/internal/contracts"
+	"github.com/ruth411/circle/internal/core/ingredient"
 	"github.com/ruth411/circle/internal/core/recipe"
 	"github.com/ruth411/circle/internal/platform/biztime"
+	"github.com/ruth411/circle/internal/platform/events"
 )
 
 type SQLRepository struct {
@@ -137,6 +140,10 @@ WHERE location_id = $1
 	if err != nil {
 		return OrderLine{}, err
 	}
+	unitsJSON, err := json.Marshal(line.IngredientUnits)
+	if err != nil {
+		return OrderLine{}, err
+	}
 	if _, err = tx.ExecContext(ctx, `
 INSERT INTO ordering.order_lines (
     location_id,
@@ -151,10 +158,11 @@ INSERT INTO ordering.order_lines (
     resolved_protein_grams,
     resolved_carbs_grams,
     resolved_fat_grams,
-    ingredient_usage_json
+    ingredient_usage_json,
+    ingredient_units_json
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13);
-`, locationID, orderID, line.LineID, line.MenuItemID, line.Name, line.Quantity, line.ResolvedPriceMinor, line.Currency, line.ResolvedMacros.Calories, line.ResolvedMacros.ProteinGrams, line.ResolvedMacros.CarbsGrams, line.ResolvedMacros.FatGrams, usageJSON); err != nil {
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14);
+`, locationID, orderID, line.LineID, line.MenuItemID, line.Name, line.Quantity, line.ResolvedPriceMinor, line.Currency, line.ResolvedMacros.Calories, line.ResolvedMacros.ProteinGrams, line.ResolvedMacros.CarbsGrams, line.ResolvedMacros.FatGrams, usageJSON, unitsJSON); err != nil {
 		if isUniqueViolation(err) {
 			return OrderLine{}, fmt.Errorf("%w: line id %s already exists", ErrInvalidOrder, line.LineID)
 		}
@@ -163,6 +171,10 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13);
 
 	for _, modifier := range line.SelectedModifiers {
 		modifierUsageJSON, marshalErr := json.Marshal(modifier.IngredientUsage)
+		if marshalErr != nil {
+			return OrderLine{}, marshalErr
+		}
+		modifierUnitsJSON, marshalErr := json.Marshal(modifier.IngredientUnits)
 		if marshalErr != nil {
 			return OrderLine{}, marshalErr
 		}
@@ -179,10 +191,11 @@ INSERT INTO ordering.order_line_modifiers (
     macro_delta_protein_grams,
     macro_delta_carbs_grams,
     macro_delta_fat_grams,
-    ingredient_usage_json
+    ingredient_usage_json,
+    ingredient_units_json
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12);
-`, locationID, orderID, line.LineID, modifier.ModifierID, modifier.Name, modifier.PriceDeltaMinor, modifier.Currency, modifier.MacroDelta.Calories, modifier.MacroDelta.ProteinGrams, modifier.MacroDelta.CarbsGrams, modifier.MacroDelta.FatGrams, modifierUsageJSON); err != nil {
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13);
+`, locationID, orderID, line.LineID, modifier.ModifierID, modifier.Name, modifier.PriceDeltaMinor, modifier.Currency, modifier.MacroDelta.Calories, modifier.MacroDelta.ProteinGrams, modifier.MacroDelta.CarbsGrams, modifier.MacroDelta.FatGrams, modifierUsageJSON, modifierUnitsJSON); err != nil {
 			return OrderLine{}, err
 		}
 	}
@@ -440,6 +453,24 @@ WHERE location_id = $1
 	if err != nil {
 		return Order{}, err
 	}
+	closedOrder, err := ToClosedOrder(closed)
+	if err != nil {
+		return Order{}, err
+	}
+	payload, err := json.Marshal(closedOrder)
+	if err != nil {
+		return Order{}, err
+	}
+	if err = events.AppendSQL(ctx, tx, events.Event{
+		ID:          "evt-order-closed-" + locationID + "-" + orderID,
+		Name:        contracts.ClosedOrderEventName,
+		AggregateID: orderID,
+		LocationID:  locationID,
+		Payload:     payload,
+		OccurredAt:  closedAt,
+	}); err != nil {
+		return Order{}, err
+	}
 	if err = tx.Commit(); err != nil {
 		return Order{}, err
 	}
@@ -539,7 +570,8 @@ SELECT
     resolved_protein_grams,
     resolved_carbs_grams,
     resolved_fat_grams,
-    ingredient_usage_json
+    ingredient_usage_json,
+    ingredient_units_json
 FROM ordering.order_lines
 WHERE location_id = $1
   AND order_id = $2
@@ -554,10 +586,14 @@ ORDER BY created_at, line_id;
 	for rows.Next() {
 		var line OrderLine
 		var usageRaw []byte
-		if err := rows.Scan(&line.LineID, &line.MenuItemID, &line.Name, &line.Quantity, &line.ResolvedPriceMinor, &line.Currency, &line.ResolvedMacros.Calories, &line.ResolvedMacros.ProteinGrams, &line.ResolvedMacros.CarbsGrams, &line.ResolvedMacros.FatGrams, &usageRaw); err != nil {
+		var unitsRaw []byte
+		if err := rows.Scan(&line.LineID, &line.MenuItemID, &line.Name, &line.Quantity, &line.ResolvedPriceMinor, &line.Currency, &line.ResolvedMacros.Calories, &line.ResolvedMacros.ProteinGrams, &line.ResolvedMacros.CarbsGrams, &line.ResolvedMacros.FatGrams, &usageRaw, &unitsRaw); err != nil {
 			return nil, err
 		}
 		if err := decodeUsage(usageRaw, &line.IngredientUsage); err != nil {
+			return nil, err
+		}
+		if err := decodeUnits(unitsRaw, &line.IngredientUnits); err != nil {
 			return nil, err
 		}
 		modifiers, err := loadLineModifiers(ctx, db, locationID, orderID, line.LineID)
@@ -581,7 +617,8 @@ SELECT
     macro_delta_protein_grams,
     macro_delta_carbs_grams,
     macro_delta_fat_grams,
-    ingredient_usage_json
+    ingredient_usage_json,
+    ingredient_units_json
 FROM ordering.order_line_modifiers
 WHERE location_id = $1
   AND order_id = $2
@@ -597,10 +634,14 @@ ORDER BY created_at, modifier_id;
 	for rows.Next() {
 		var modifier recipe.SnapshotModifier
 		var usageRaw []byte
-		if err := rows.Scan(&modifier.ModifierID, &modifier.Name, &modifier.PriceDeltaMinor, &modifier.Currency, &modifier.MacroDelta.Calories, &modifier.MacroDelta.ProteinGrams, &modifier.MacroDelta.CarbsGrams, &modifier.MacroDelta.FatGrams, &usageRaw); err != nil {
+		var unitsRaw []byte
+		if err := rows.Scan(&modifier.ModifierID, &modifier.Name, &modifier.PriceDeltaMinor, &modifier.Currency, &modifier.MacroDelta.Calories, &modifier.MacroDelta.ProteinGrams, &modifier.MacroDelta.CarbsGrams, &modifier.MacroDelta.FatGrams, &usageRaw, &unitsRaw); err != nil {
 			return nil, err
 		}
 		if err := decodeUsage(usageRaw, &modifier.IngredientUsage); err != nil {
+			return nil, err
+		}
+		if err := decodeUnits(unitsRaw, &modifier.IngredientUnits); err != nil {
 			return nil, err
 		}
 		modifiers = append(modifiers, modifier)
@@ -609,6 +650,14 @@ ORDER BY created_at, modifier_id;
 }
 
 func decodeUsage(raw []byte, out *map[string]float64) error {
+	if len(raw) == 0 {
+		*out = nil
+		return nil
+	}
+	return json.Unmarshal(raw, out)
+}
+
+func decodeUnits(raw []byte, out *map[string]ingredient.Unit) error {
 	if len(raw) == 0 {
 		*out = nil
 		return nil

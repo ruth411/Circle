@@ -182,6 +182,7 @@ func TestGenerateSnapshotBuildsDerivedModifierDataAndVersions(t *testing.T) {
 				return ResolvedRecipeData{
 					Macros:          ingredient.MacroValues{Calories: 25},
 					IngredientUsage: map[string]float64{"salsa": 100},
+					IngredientUnits: map[string]ingredient.Unit{"salsa": ingredient.UnitGram},
 				}, nil
 			},
 			resolveModifierFn: func(modifier Modifier) (ResolvedModifierData, error) {
@@ -190,11 +191,13 @@ func TestGenerateSnapshotBuildsDerivedModifierDataAndVersions(t *testing.T) {
 					return ResolvedModifierData{
 						MacroDelta:      ingredient.MacroValues{Calories: 180, ProteinGrams: 32},
 						IngredientUsage: map[string]float64{"chicken": 1},
+						IngredientUnits: map[string]ingredient.Unit{"chicken": ingredient.UnitGram},
 					}, nil
 				case "mod-guac":
 					return ResolvedModifierData{
 						MacroDelta:      ingredient.MacroValues{Calories: 230, FatGrams: 22},
 						IngredientUsage: map[string]float64{"guac": 1},
+						IngredientUnits: map[string]ingredient.Unit{"guac": ingredient.UnitGram},
 					}, nil
 				default:
 					return ResolvedModifierData{}, errors.New("unexpected modifier")
@@ -218,6 +221,12 @@ func TestGenerateSnapshotBuildsDerivedModifierDataAndVersions(t *testing.T) {
 	}
 	if got := snapshot.Items[0].ModifierGroups[0].Modifiers[0].IngredientUsage["chicken"]; got != 1 {
 		t.Fatalf("modifier chicken usage = %v, want 1", got)
+	}
+	if got := snapshot.Items[0].ModifierGroups[0].Modifiers[0].IngredientUnits["chicken"]; got != ingredient.UnitGram {
+		t.Fatalf("modifier chicken unit = %s, want g", got)
+	}
+	if got := snapshot.Items[0].IngredientUnits["salsa"]; got != ingredient.UnitGram {
+		t.Fatalf("snapshot salsa unit = %s, want g", got)
 	}
 
 	snapshot, err = service.GenerateSnapshot(context.Background(), GenerateSnapshotInput{

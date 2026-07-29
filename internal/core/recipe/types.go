@@ -78,6 +78,7 @@ type SnapshotModifier struct {
 	Currency        string
 	MacroDelta      ingredient.MacroValues
 	IngredientUsage map[string]float64
+	IngredientUnits map[string]ingredient.Unit
 }
 
 type SnapshotModifierGroup struct {
@@ -99,6 +100,7 @@ type SnapshotItem struct {
 	Currency        string
 	Macros          ingredient.MacroValues
 	IngredientUsage map[string]float64
+	IngredientUnits map[string]ingredient.Unit
 	ModifierGroups  []SnapshotModifierGroup
 }
 

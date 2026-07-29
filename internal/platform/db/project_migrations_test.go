@@ -56,6 +56,9 @@ func TestProjectMigrationsIncludePhase1Tables(t *testing.T) {
 		"CREATE TABLE IF NOT EXISTS ordering.order_line_modifiers",
 		"CREATE TABLE IF NOT EXISTS ordering.checks",
 		"CREATE TABLE IF NOT EXISTS ordering.tenders",
+		"CREATE TABLE IF NOT EXISTS inventory.inventory_movements",
+		"CREATE TABLE IF NOT EXISTS inventory.inventory_counts",
+		"CREATE TABLE IF NOT EXISTS inventory.inventory_count_lines",
 		"ALTER COLUMN location_id DROP NOT NULL",
 	}
 
