@@ -142,7 +142,7 @@ func withJSONNotFound(next http.Handler) http.Handler {
 			status: http.StatusOK,
 		}
 		next.ServeHTTP(recorder, r)
-		if recorder.status == http.StatusNotFound {
+		if recorder.status == http.StatusNotFound && servesMuxNotFound(recorder.body.Bytes(), recorder.header) {
 			WriteError(w, r, http.StatusNotFound, "not_found", "route not found")
 			return
 		}
@@ -184,6 +184,16 @@ func loggedPath(path string) string {
 	default:
 		return path
 	}
+}
+
+func servesMuxNotFound(body []byte, header http.Header) bool {
+	if len(body) == 0 {
+		return true
+	}
+	if contentType := header.Get("Content-Type"); contentType != "" && !strings.HasPrefix(contentType, "text/plain") {
+		return false
+	}
+	return string(body) == "404 page not found\n"
 }
 
 type bufferedResponseWriter struct {

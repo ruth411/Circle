@@ -608,6 +608,151 @@ func TestCloseCheckRejectsSecondCloseWhilePaymentInProgress(t *testing.T) {
 	}
 }
 
+func TestCloseCheckRejectsSameTenderRetryWhilePaymentInProgress(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+
+	service := NewService(blockingProvider{
+		started: started,
+		release: release,
+	})
+	if err := service.RegisterSnapshot(recipe.MenuSnapshot{
+		ID:         "snap-1",
+		LocationID: "loc-1",
+		Version:    1,
+		Items: []recipe.SnapshotItem{
+			{
+				MenuItemID: "bowl",
+				Name:       "Bowl",
+				PriceMinor: 1200,
+				Currency:   "USD",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("RegisterSnapshot returned error: %v", err)
+	}
+
+	order, err := service.CreateOrder(context.Background(), CreateOrderInput{
+		OrderID:      "order-1",
+		LocationID:   "loc-1",
+		SnapshotID:   "snap-1",
+		BusinessDate: biztime.FromTime(time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)),
+	})
+	if err != nil {
+		t.Fatalf("CreateOrder returned error: %v", err)
+	}
+
+	if _, err := service.AddLine(context.Background(), AddLineInput{
+		LocationID: "loc-1",
+		OrderID:    order.ID,
+		MenuItemID: "bowl",
+		Quantity:   1,
+	}); err != nil {
+		t.Fatalf("AddLine returned error: %v", err)
+	}
+
+	done := make(chan error, 1)
+	input := CloseCheckInput{
+		LocationID: "loc-1",
+		OrderID:    order.ID,
+		Tender: Tender{
+			ID:          "tender-1",
+			CheckID:     order.CheckID,
+			AmountMinor: 1200,
+			Currency:    "USD",
+			Kind:        "mock",
+		},
+	}
+	go func() {
+		_, err := service.CloseCheck(context.Background(), input)
+		done <- err
+	}()
+
+	<-started
+
+	if _, err := service.CloseCheck(context.Background(), input); !errors.Is(err, ErrOrderAlreadyClosing) {
+		t.Fatalf("expected same tender retry to be rejected, got %v", err)
+	}
+
+	close(release)
+
+	if err := <-done; err != nil {
+		t.Fatalf("first CloseCheck returned error: %v", err)
+	}
+}
+
+func TestAddLineAppliesDefaultSnapshotModifiers(t *testing.T) {
+	service := NewService(MockProvider{})
+	if err := service.RegisterSnapshot(recipe.MenuSnapshot{
+		ID:         "snap-1",
+		LocationID: "loc-1",
+		Version:    1,
+		Items: []recipe.SnapshotItem{
+			{
+				MenuItemID:      "bowl",
+				Name:            "Bowl",
+				PriceMinor:      1200,
+				Currency:        "USD",
+				Macros:          ingredient.MacroValues{Calories: 500, ProteinGrams: 30},
+				IngredientUsage: map[string]float64{"chicken": 100},
+				IngredientUnits: map[string]ingredient.Unit{"chicken": ingredient.UnitGram},
+				ModifierGroups: []recipe.SnapshotModifierGroup{
+					{
+						GroupID:            "protein",
+						SelectionMin:       1,
+						SelectionMax:       1,
+						Required:           true,
+						Exclusive:          true,
+						DefaultModifierIDs: []string{"chicken"},
+						Modifiers: []recipe.SnapshotModifier{
+							{
+								ModifierID:      "chicken",
+								Name:            "Chicken",
+								PriceDeltaMinor: 100,
+								Currency:        "USD",
+								MacroDelta:      ingredient.MacroValues{Calories: 150, ProteinGrams: 20},
+								IngredientUsage: map[string]float64{"chicken": 50},
+								IngredientUnits: map[string]ingredient.Unit{"chicken": ingredient.UnitGram},
+							},
+						},
+					},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("RegisterSnapshot returned error: %v", err)
+	}
+
+	order, err := service.CreateOrder(context.Background(), CreateOrderInput{
+		OrderID:      "order-1",
+		LocationID:   "loc-1",
+		SnapshotID:   "snap-1",
+		BusinessDate: biztime.FromTime(time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)),
+	})
+	if err != nil {
+		t.Fatalf("CreateOrder returned error: %v", err)
+	}
+
+	line, err := service.AddLine(context.Background(), AddLineInput{
+		LocationID: "loc-1",
+		OrderID:    order.ID,
+		MenuItemID: "bowl",
+		Quantity:   1,
+	})
+	if err != nil {
+		t.Fatalf("AddLine returned error: %v", err)
+	}
+	if len(line.SelectedModifiers) != 1 || line.SelectedModifiers[0].ModifierID != "chicken" {
+		t.Fatalf("selected modifiers = %+v, want default chicken", line.SelectedModifiers)
+	}
+	if line.ResolvedPriceMinor != 1300 {
+		t.Fatalf("price = %d, want 1300", line.ResolvedPriceMinor)
+	}
+	if line.ResolvedMacros.Calories != 650 {
+		t.Fatalf("calories = %v, want 650", line.ResolvedMacros.Calories)
+	}
+}
+
 func TestCreateOrderRejectsSnapshotLocationMismatch(t *testing.T) {
 	service := NewService(MockProvider{})
 	if err := service.RegisterSnapshot(recipe.MenuSnapshot{

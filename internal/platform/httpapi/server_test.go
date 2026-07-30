@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ruth411/circle/internal/diner"
 	"github.com/ruth411/circle/internal/tenancy"
 )
 
@@ -61,6 +62,28 @@ func TestUnknownRouteReturnsJSONError(t *testing.T) {
 	}
 	if payload.Error.RequestID == "" {
 		t.Fatal("request_id empty, want generated id")
+	}
+}
+
+func TestHandlerGenerated404IsPreserved(t *testing.T) {
+	server := NewServerWithDependencies(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		DinerService: diner.NewService(),
+	})
+	req := httptest.NewRequest(http.MethodGet, "/diner/tokens/missing-token", nil)
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", recorder.Code)
+	}
+
+	var payload ErrorResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+	if payload.Error.Code != "token_unavailable" {
+		t.Fatalf("code = %q, want token_unavailable", payload.Error.Code)
 	}
 }
 
