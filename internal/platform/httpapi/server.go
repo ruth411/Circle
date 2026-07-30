@@ -9,9 +9,11 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/ruth411/circle/internal/core/ingredient"
+	"github.com/ruth411/circle/internal/diner"
 	"github.com/ruth411/circle/internal/ordering"
 	"github.com/ruth411/circle/internal/tenancy"
 )
@@ -36,6 +38,7 @@ func NewServer(logger *slog.Logger) http.Handler {
 
 type Dependencies struct {
 	IngredientService    *ingredient.Service
+	DinerService         *diner.Service
 	OrderingService      *ordering.Service
 	SessionValidator     SessionValidator
 	LocationResolver     tenancy.Resolver
@@ -57,6 +60,9 @@ func NewServerWithDependencies(logger *slog.Logger, deps Dependencies) http.Hand
 		locationResolver:     deps.LocationResolver,
 		organizationResolver: deps.OrganizationResolver,
 		sessionValidator:     deps.SessionValidator,
+	})
+	registerDinerRoutes(mux, dinerDependencies{
+		service: deps.DinerService,
 	})
 	return withRecover(logger, withRequestID(withLogging(logger, withJSONNotFound(mux))))
 }
@@ -108,7 +114,7 @@ func withLogging(logger *slog.Logger, next http.Handler) http.Handler {
 
 		logger.Info("http request",
 			"method", r.Method,
-			"path", r.URL.Path,
+			"path", loggedPath(r.URL.Path),
 			"status", recorder.status,
 			"duration_ms", time.Since(startedAt).Milliseconds(),
 			"request_id", RequestID(r.Context()),
@@ -166,6 +172,17 @@ func copyHeaders(dst http.Header, src http.Header) {
 		for _, value := range values {
 			dst.Add(key, value)
 		}
+	}
+}
+
+func loggedPath(path string) string {
+	switch {
+	case strings.HasPrefix(path, "/diner/tokens/"):
+		return "/diner/tokens/{token}"
+	case strings.HasPrefix(path, "/diner/claims/"):
+		return "/diner/claims/{id}"
+	default:
+		return path
 	}
 }
 

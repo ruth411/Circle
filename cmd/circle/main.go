@@ -13,6 +13,7 @@ import (
 
 	"github.com/ruth411/circle/internal/core/ingredient"
 	"github.com/ruth411/circle/internal/core/recipe"
+	"github.com/ruth411/circle/internal/diner"
 	"github.com/ruth411/circle/internal/identity"
 	"github.com/ruth411/circle/internal/inventory"
 	"github.com/ruth411/circle/internal/ordering"
@@ -71,14 +72,18 @@ func main() {
 	orderingService := ordering.NewServiceWithDependencies(ordering.NewSQLRepository(database), recipeRepository, ordering.MockProvider{})
 	inventoryService := inventory.NewService(inventory.NewSQLRepository(database))
 	inventoryProcessor := inventory.NewProcessor(outbox, inventoryService)
+	dinerService := diner.NewServiceWithRepository(diner.NewSQLRepository(database))
+	dinerProcessor := diner.NewProcessor(outbox, dinerService)
 	sessionValidator := identity.NewSQLSessionValidator(database)
 
 	go runInventoryProcessor(ctx, logger, inventoryProcessor)
+	go runDinerProcessor(ctx, logger, dinerProcessor)
 
 	server := &http.Server{
 		Addr: addr,
 		Handler: httpapi.NewServerWithDependencies(logger, httpapi.Dependencies{
 			IngredientService:    ingredientService,
+			DinerService:         dinerService,
 			OrderingService:      orderingService,
 			SessionValidator:     sessionValidator,
 			OrganizationResolver: tenancy.NewSQLOrganizationResolver(database),
@@ -113,6 +118,31 @@ func runInventoryProcessor(ctx context.Context, logger *slog.Logger, processor *
 			}
 			if processed > 0 {
 				logger.Info("inventory processor applied events", "count", processed)
+			}
+		}
+	}
+}
+
+func runDinerProcessor(ctx context.Context, logger *slog.Logger, processor *diner.Processor) {
+	if processor == nil {
+		return
+	}
+
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			processed, err := processor.ProcessPendingClosedOrders(ctx, 100)
+			if err != nil && !errors.Is(err, context.Canceled) {
+				logger.Warn("diner processor failed", "err", err)
+				continue
+			}
+			if processed > 0 {
+				logger.Info("diner processor issued tokens", "count", processed)
 			}
 		}
 	}

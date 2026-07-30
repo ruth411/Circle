@@ -101,3 +101,22 @@ func TestRequestIDIsPresentInLogs(t *testing.T) {
 		t.Fatalf("log output missing request_id, got %q", logOutput)
 	}
 }
+
+func TestDinerTokensAreRedactedInLogs(t *testing.T) {
+	var logBuffer bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuffer, nil))
+	server := NewServer(logger)
+
+	req := httptest.NewRequest(http.MethodGet, "/diner/tokens/token-secret-1", nil)
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, req)
+
+	logOutput := logBuffer.String()
+	if strings.Contains(logOutput, "token-secret-1") {
+		t.Fatalf("log output leaked token, got %q", logOutput)
+	}
+	if !strings.Contains(logOutput, `"/diner/tokens/{token}"`) {
+		t.Fatalf("log output missing redacted path, got %q", logOutput)
+	}
+}

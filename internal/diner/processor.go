@@ -1,4 +1,4 @@
-package inventory
+package diner
 
 import (
 	"context"
@@ -10,8 +10,6 @@ import (
 	"github.com/ruth411/circle/internal/contracts"
 	"github.com/ruth411/circle/internal/platform/events"
 )
-
-const outboxConsumer = "inventory"
 
 type Processor struct {
 	outbox  events.Reader
@@ -30,7 +28,7 @@ func (p *Processor) ProcessPendingClosedOrders(ctx context.Context, limit int) (
 		return 0, fmt.Errorf("outbox reader is required")
 	}
 	if p.service == nil {
-		return 0, fmt.Errorf("inventory service is required")
+		return 0, fmt.Errorf("diner service is required")
 	}
 
 	pending, err := p.outbox.ListUnpublished(ctx, outboxConsumer, contracts.ClosedOrderEventName, limit)
@@ -50,8 +48,8 @@ func (p *Processor) ProcessPendingClosedOrders(ctx context.Context, limit int) (
 		if order.LocationID == "" {
 			order.LocationID = event.LocationID
 		}
-		if _, err := p.service.RecordDepletion(ctx, order); err != nil {
-			if errors.Is(err, ErrInvalidClosedOrderData) {
+		if _, err := p.service.IssueToken(ctx, order); err != nil {
+			if errors.Is(err, ErrInvalidTokenData) {
 				if err := markInvalidEventDelivered(ctx, p.outbox, event.ID, "invalid_closed_order", err); err != nil {
 					return processed, err
 				}

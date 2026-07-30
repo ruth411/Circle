@@ -52,7 +52,7 @@ func (r *SQLRepository) RecordDepletion(ctx context.Context, order contracts.Clo
 	for i, ingredientID := range ingredientIDs {
 		unit, ok := units[ingredientID]
 		if !ok {
-			return nil, fmt.Errorf("missing unit snapshot for ingredient %s", ingredientID)
+			return nil, fmt.Errorf("%w: missing unit snapshot for ingredient %s", ErrInvalidClosedOrderData, ingredientID)
 		}
 
 		movement := Movement{

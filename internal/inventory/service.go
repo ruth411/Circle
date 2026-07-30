@@ -2,6 +2,7 @@ package inventory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -9,6 +10,8 @@ import (
 	"github.com/ruth411/circle/internal/contracts"
 	"github.com/ruth411/circle/internal/core/ingredient"
 )
+
+var ErrInvalidClosedOrderData = errors.New("invalid closed order data")
 
 type Repository interface {
 	RecordDepletion(context.Context, contracts.ClosedOrder) ([]Movement, error)
@@ -39,13 +42,13 @@ func (s *Service) RecordDepletion(ctx context.Context, order contracts.ClosedOrd
 	}
 	order.LocationID = strings.TrimSpace(order.LocationID)
 	if order.LocationID == "" {
-		return nil, fmt.Errorf("closed order location id is required")
+		return nil, fmt.Errorf("%w: closed order location id is required", ErrInvalidClosedOrderData)
 	}
 	if strings.TrimSpace(order.OrderID) == "" {
-		return nil, fmt.Errorf("closed order id is required")
+		return nil, fmt.Errorf("%w: closed order id is required", ErrInvalidClosedOrderData)
 	}
 	if order.ClosedAt.IsZero() {
-		return nil, fmt.Errorf("order %s must have a closed timestamp", order.OrderID)
+		return nil, fmt.Errorf("%w: order %s must have a closed timestamp", ErrInvalidClosedOrderData, order.OrderID)
 	}
 	return s.repo.RecordDepletion(ctx, order)
 }

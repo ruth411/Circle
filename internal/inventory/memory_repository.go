@@ -80,7 +80,7 @@ func aggregateUsageAndUnits(order contracts.ClosedOrder) (map[string]float64, ma
 		for ingredientID, qty := range line.IngredientUsage {
 			unit, ok := line.IngredientUnits[ingredientID]
 			if !ok {
-				return nil, nil, fmt.Errorf("missing unit snapshot for ingredient %s", ingredientID)
+				return nil, nil, fmt.Errorf("%w: missing unit snapshot for ingredient %s", ErrInvalidClosedOrderData, ingredientID)
 			}
 			usage[ingredientID] += qty
 			units[ingredientID] = unit
