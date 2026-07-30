@@ -21,15 +21,23 @@ type Confidence struct {
 }
 
 type ResolvedRecipe struct {
-	TotalMacros     ingredient.MacroValues
-	PerServing      ingredient.MacroValues
-	IngredientUsage map[string]float64
-	Confidence      Confidence
+	TotalMacros         ingredient.MacroValues
+	PerServing          ingredient.MacroValues
+	TotalCostMinor      int64
+	PerServingCostMinor int64
+	IngredientUsage     map[string]float64
+	IngredientUnits     map[string]ingredient.Unit
+	Confidence          Confidence
+
+	totalCostMinorExact      float64
+	perServingCostMinorExact float64
 }
 
 type ResolvedModifier struct {
 	MacroDelta      ingredient.MacroValues
+	CostDeltaMinor  int64
 	IngredientUsage map[string]float64
+	IngredientUnits map[string]ingredient.Unit
 	Confidence      Confidence
 }
 
@@ -50,7 +58,9 @@ func (c Calculator) ResolveRecipe(recipeID string) (ResolvedRecipe, error) {
 func (c Calculator) ResolveModifier(modifier recipe.Modifier) (ResolvedModifier, error) {
 	confidence := Confidence{Level: ConfidenceHigh}
 	total := ingredient.MacroValues{}
+	totalCost := 0.0
 	usage := map[string]float64{}
+	units := map[string]ingredient.Unit{}
 
 	for _, delta := range modifier.IngredientDeltas {
 		ing, ok := c.Ingredients[delta.IngredientID]
@@ -78,7 +88,9 @@ func (c Calculator) ResolveModifier(modifier recipe.Modifier) (ResolvedModifier,
 		}
 
 		total = total.Add(ing.MacrosPerBaseUnit.Scale(signedQty))
+		totalCost += float64(ing.CurrentCostMinor) * signedQty
 		usage[ing.ID] += signedQty
+		units[ing.ID] = ing.BaseUnit
 
 		if ing.VerificationStatus != ingredient.VerificationVerified {
 			confidence.downgrade(ConfidenceMedium, fmt.Sprintf("ingredient %s is unverified", ing.ID))
@@ -87,7 +99,9 @@ func (c Calculator) ResolveModifier(modifier recipe.Modifier) (ResolvedModifier,
 
 	return ResolvedModifier{
 		MacroDelta:      total,
+		CostDeltaMinor:  roundMinor(totalCost),
 		IngredientUsage: usage,
+		IngredientUnits: units,
 		Confidence:      confidence,
 	}, nil
 }
@@ -111,7 +125,9 @@ func (c Calculator) resolveRecipe(recipeID string, depth int, stack map[string]b
 
 	confidence := Confidence{Level: ConfidenceHigh}
 	total := ingredient.MacroValues{}
+	totalCost := 0.0
 	usage := map[string]float64{}
+	units := map[string]ingredient.Unit{}
 
 	for _, line := range current.Lines {
 		switch line.TargetType {
@@ -136,7 +152,9 @@ func (c Calculator) resolveRecipe(recipeID string, depth int, stack map[string]b
 			}
 
 			total = total.Add(ing.MacrosPerBaseUnit.Scale(baseQty))
+			totalCost += float64(ing.CurrentCostMinor) * baseQty
 			usage[ing.ID] += baseQty
+			units[ing.ID] = ing.BaseUnit
 
 			if ing.VerificationStatus != ingredient.VerificationVerified {
 				confidence.downgrade(ConfidenceMedium, fmt.Sprintf("ingredient %s is unverified", ing.ID))
@@ -152,7 +170,9 @@ func (c Calculator) resolveRecipe(recipeID string, depth int, stack map[string]b
 			}
 
 			total = total.Add(child.PerServing.Scale(line.Quantity))
+			totalCost += child.perServingCostMinorExact * line.Quantity
 			mergeUsage(usage, child.IngredientUsage, line.Quantity)
+			mergeUnits(units, child.IngredientUnits)
 			confidence.merge(child.Confidence)
 		default:
 			return ResolvedRecipe{}, fmt.Errorf("unknown line target type %q", line.TargetType)
@@ -165,11 +185,18 @@ func (c Calculator) resolveRecipe(recipeID string, depth int, stack map[string]b
 		confidence.downgrade(ConfidenceLow, fmt.Sprintf("recipe %s has non-positive yield count", current.ID))
 	}
 
+	perServingCost := totalCost / yieldCount
+
 	return ResolvedRecipe{
-		TotalMacros:     total,
-		PerServing:      total.Scale(1 / yieldCount),
-		IngredientUsage: usage,
-		Confidence:      confidence,
+		TotalMacros:              total,
+		PerServing:               total.Scale(1 / yieldCount),
+		TotalCostMinor:           roundMinor(totalCost),
+		PerServingCostMinor:      roundMinor(perServingCost),
+		IngredientUsage:          usage,
+		IngredientUnits:          units,
+		Confidence:               confidence,
+		totalCostMinorExact:      totalCost,
+		perServingCostMinorExact: perServingCost,
 	}, nil
 }
 
@@ -206,9 +233,22 @@ func mergeUsage(dst map[string]float64, src map[string]float64, multiplier float
 	}
 }
 
+func mergeUnits(dst map[string]ingredient.Unit, src map[string]ingredient.Unit) {
+	for ingredientID, unit := range src {
+		dst[ingredientID] = unit
+	}
+}
+
 func abs(v float64) float64 {
 	if v < 0 {
 		return -v
 	}
 	return v
+}
+
+func roundMinor(value float64) int64 {
+	if value < 0 {
+		return int64(value - 0.5)
+	}
+	return int64(value + 0.5)
 }

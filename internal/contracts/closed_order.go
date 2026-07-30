@@ -7,10 +7,13 @@ import (
 )
 
 type ClosedOrder struct {
-	OrderID  string
-	ClosedAt time.Time
-	Lines    []ClosedOrderLine
+	OrderID    string
+	LocationID string
+	ClosedAt   time.Time
+	Lines      []ClosedOrderLine
 }
+
+const ClosedOrderEventName = "ordering.closed_order"
 
 type ClosedOrderLine struct {
 	LineID          string
@@ -18,4 +21,5 @@ type ClosedOrderLine struct {
 	Quantity        int
 	ResolvedMacros  ingredient.MacroValues
 	IngredientUsage map[string]float64
+	IngredientUnits map[string]ingredient.Unit
 }

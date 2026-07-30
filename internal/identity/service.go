@@ -238,7 +238,7 @@ func (s *Service) IssueSession(sessionID string, userID string, ttl time.Duratio
 	return session, nil
 }
 
-func (s *Service) ValidateSession(sessionID string) (Session, error) {
+func (s *Service) ValidateSession(_ context.Context, sessionID string) (Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

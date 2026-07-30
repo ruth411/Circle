@@ -21,6 +21,10 @@ func NewSQLRepository(db *sql.DB) *SQLRepository {
 	return &SQLRepository{db: db}
 }
 
+func (r *SQLRepository) Get(ctx context.Context, locationID string, ingredientID string) (Ingredient, error) {
+	return getByID(ctx, r.db, locationID, ingredientID)
+}
+
 func (r *SQLRepository) List(ctx context.Context, locationID string, search string) ([]Ingredient, error) {
 	const query = `
 SELECT

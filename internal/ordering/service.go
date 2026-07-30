@@ -2,14 +2,24 @@ package ordering
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"sync"
+	"strings"
 	"time"
 
 	"github.com/ruth411/circle/internal/contracts"
 	"github.com/ruth411/circle/internal/core/ingredient"
 	"github.com/ruth411/circle/internal/core/recipe"
 	"github.com/ruth411/circle/internal/platform/biztime"
+)
+
+var (
+	ErrOrderNotFound       = errors.New("order not found")
+	ErrInvalidOrder        = errors.New("invalid order")
+	ErrOrderNotEditable    = errors.New("order not editable")
+	ErrOrderAlreadyClosing = errors.New("order is already closing")
+	ErrUnderpaidTender     = errors.New("underpaid tender")
+	ErrPaymentFailed       = errors.New("payment failed")
 )
 
 type OrderStatus string
@@ -22,6 +32,20 @@ const (
 
 type PaymentProvider interface {
 	Process(context.Context, Tender) error
+}
+
+type SnapshotLookup interface {
+	GetSnapshot(context.Context, string, string) (recipe.MenuSnapshot, error)
+}
+
+type Repository interface {
+	Get(context.Context, string, string) (Order, error)
+	Create(context.Context, Order) (Order, error)
+	AddLine(context.Context, string, string, OrderLine) (OrderLine, error)
+	StartClose(context.Context, string, string, Tender) (Order, error)
+	MarkTenderSucceeded(context.Context, string, string, string) error
+	FailClose(context.Context, string, string, string) error
+	FinishClose(context.Context, string, string, string, time.Time) (Order, error)
 }
 
 type MockProvider struct {
@@ -49,6 +73,7 @@ type OrderLine struct {
 	Currency           string
 	ResolvedMacros     ingredient.MacroValues
 	IngredientUsage    map[string]float64
+	IngredientUnits    map[string]ingredient.Unit
 	SelectedModifiers  []recipe.SnapshotModifier
 }
 
@@ -60,6 +85,8 @@ type Order struct {
 	SnapshotVersion int
 	BusinessDate    biztime.BusinessDate
 	Status          OrderStatus
+	TotalMinor      int64
+	Currency        string
 	Lines           []OrderLine
 	ClosedAt        *time.Time
 }
@@ -73,6 +100,7 @@ type CreateOrderInput struct {
 }
 
 type AddLineInput struct {
+	LocationID  string
 	OrderID     string
 	LineID      string
 	MenuItemID  string
@@ -81,119 +109,161 @@ type AddLineInput struct {
 }
 
 type CloseCheckInput struct {
-	OrderID string
-	Tender  Tender
+	LocationID string
+	OrderID    string
+	Tender     Tender
 }
 
 type Service struct {
-	mu        sync.Mutex
+	repo      Repository
+	snapshots SnapshotLookup
 	payment   PaymentProvider
-	orders    map[string]Order
-	snapshots map[string]recipe.MenuSnapshot
 }
 
 func NewService(payment PaymentProvider) *Service {
+	return NewServiceWithDependencies(newMemoryRepository(), newMemorySnapshotStore(), payment)
+}
+
+func NewServiceWithDependencies(repo Repository, snapshots SnapshotLookup, payment PaymentProvider) *Service {
+	if payment == nil {
+		payment = MockProvider{}
+	}
 	return &Service{
+		repo:      repo,
+		snapshots: snapshots,
 		payment:   payment,
-		orders:    map[string]Order{},
-		snapshots: map[string]recipe.MenuSnapshot{},
 	}
 }
 
-func (s *Service) RegisterSnapshot(snapshot recipe.MenuSnapshot) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.snapshots[snapshot.ID] = snapshot
+func (s *Service) RegisterSnapshot(snapshot recipe.MenuSnapshot) error {
+	if store, ok := s.snapshots.(*memorySnapshotStore); ok {
+		store.Register(snapshot)
+		return nil
+	}
+
+	return fmt.Errorf("snapshot registration is only supported by the in-memory snapshot store")
 }
 
-func (s *Service) CreateOrder(input CreateOrderInput) (Order, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	snapshot, ok := s.snapshots[input.SnapshotID]
-	if !ok {
-		return Order{}, fmt.Errorf("snapshot %s not found", input.SnapshotID)
+func (s *Service) GetOrder(ctx context.Context, locationID string, orderID string) (Order, error) {
+	if s.repo == nil {
+		return Order{}, fmt.Errorf("order repository is required")
 	}
-	if snapshot.LocationID != input.LocationID {
-		return Order{}, fmt.Errorf("snapshot %s belongs to location %s, not %s", snapshot.ID, snapshot.LocationID, input.LocationID)
+	locationID = strings.TrimSpace(locationID)
+	orderID = strings.TrimSpace(orderID)
+	if locationID == "" {
+		return Order{}, fmt.Errorf("%w: location id is required", ErrInvalidOrder)
+	}
+	if orderID == "" {
+		return Order{}, fmt.Errorf("%w: order id is required", ErrInvalidOrder)
+	}
+	return s.repo.Get(ctx, locationID, orderID)
+}
+
+func (s *Service) CreateOrder(ctx context.Context, input CreateOrderInput) (Order, error) {
+	if s.repo == nil {
+		return Order{}, fmt.Errorf("order repository is required")
+	}
+	if s.snapshots == nil {
+		return Order{}, fmt.Errorf("snapshot lookup is required")
+	}
+
+	orderID := strings.TrimSpace(input.OrderID)
+	locationID := strings.TrimSpace(input.LocationID)
+	snapshotID := strings.TrimSpace(input.SnapshotID)
+	checkID := strings.TrimSpace(input.CheckID)
+
+	if orderID == "" {
+		return Order{}, fmt.Errorf("%w: order id is required", ErrInvalidOrder)
+	}
+	if locationID == "" {
+		return Order{}, fmt.Errorf("%w: location id is required", ErrInvalidOrder)
+	}
+	if snapshotID == "" {
+		return Order{}, fmt.Errorf("%w: snapshot id is required", ErrInvalidOrder)
 	}
 	if err := input.BusinessDate.Valid(); err != nil {
+		return Order{}, fmt.Errorf("%w: %v", ErrInvalidOrder, err)
+	}
+	if checkID == "" {
+		checkID = orderID
+	}
+
+	snapshot, err := s.snapshots.GetSnapshot(ctx, locationID, snapshotID)
+	if err != nil {
 		return Order{}, err
 	}
 
-	checkID := input.CheckID
-	if checkID == "" {
-		checkID = input.OrderID
-	}
-
-	if existing, ok := s.orders[input.OrderID]; ok {
-		if existing.CheckID == checkID &&
-			existing.LocationID == input.LocationID &&
-			existing.SnapshotID == input.SnapshotID &&
-			existing.BusinessDate == input.BusinessDate {
-			return cloneOrder(existing), nil
-		}
-		return Order{}, fmt.Errorf("order %s already exists with different attributes", input.OrderID)
-	}
-
-	order := Order{
-		ID:              input.OrderID,
+	return s.repo.Create(ctx, Order{
+		ID:              orderID,
 		CheckID:         checkID,
-		LocationID:      input.LocationID,
+		LocationID:      locationID,
 		SnapshotID:      snapshot.ID,
 		SnapshotVersion: snapshot.Version,
 		BusinessDate:    input.BusinessDate,
 		Status:          OrderStatusOpen,
-	}
-
-	s.orders[order.ID] = order
-	return cloneOrder(order), nil
+	})
 }
 
-func (s *Service) AddLine(input AddLineInput) (OrderLine, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if input.Quantity <= 0 {
-		return OrderLine{}, fmt.Errorf("quantity must be positive")
+func (s *Service) AddLine(ctx context.Context, input AddLineInput) (OrderLine, error) {
+	if s.repo == nil {
+		return OrderLine{}, fmt.Errorf("order repository is required")
+	}
+	if s.snapshots == nil {
+		return OrderLine{}, fmt.Errorf("snapshot lookup is required")
 	}
 
-	order, ok := s.orders[input.OrderID]
-	if !ok {
-		return OrderLine{}, fmt.Errorf("order %s not found", input.OrderID)
+	locationID := strings.TrimSpace(input.LocationID)
+	orderID := strings.TrimSpace(input.OrderID)
+	menuItemID := strings.TrimSpace(input.MenuItemID)
+	lineID := strings.TrimSpace(input.LineID)
+	if locationID == "" {
+		return OrderLine{}, fmt.Errorf("%w: location id is required", ErrInvalidOrder)
+	}
+	if orderID == "" {
+		return OrderLine{}, fmt.Errorf("%w: order id is required", ErrInvalidOrder)
+	}
+	if menuItemID == "" {
+		return OrderLine{}, fmt.Errorf("%w: menu item id is required", ErrInvalidOrder)
+	}
+	if input.Quantity <= 0 {
+		return OrderLine{}, fmt.Errorf("%w: quantity must be positive", ErrInvalidOrder)
+	}
+
+	order, err := s.repo.Get(ctx, locationID, orderID)
+	if err != nil {
+		return OrderLine{}, err
 	}
 	if order.Status != OrderStatusOpen {
-		return OrderLine{}, fmt.Errorf("order %s is not editable", input.OrderID)
+		return OrderLine{}, fmt.Errorf("%w: order %s is not editable", ErrOrderNotEditable, order.ID)
 	}
 
-	snapshot, ok := s.snapshots[order.SnapshotID]
-	if !ok {
-		return OrderLine{}, fmt.Errorf("snapshot %s not found", order.SnapshotID)
-	}
-
-	item, err := findSnapshotItem(snapshot, input.MenuItemID)
+	snapshot, err := s.snapshots.GetSnapshot(ctx, order.LocationID, order.SnapshotID)
 	if err != nil {
 		return OrderLine{}, err
 	}
 
+	item, err := findSnapshotItem(snapshot, menuItemID)
+	if err != nil {
+		return OrderLine{}, fmt.Errorf("%w: %v", ErrInvalidOrder, err)
+	}
 	selectedModifiers, err := selectModifiers(item, input.ModifierIDs)
 	if err != nil {
-		return OrderLine{}, err
-	}
-
-	lineID := input.LineID
-	if lineID == "" {
-		lineID = fmt.Sprintf("%s-%d", order.ID, len(order.Lines)+1)
+		return OrderLine{}, fmt.Errorf("%w: %v", ErrInvalidOrder, err)
 	}
 
 	unitPrice := item.PriceMinor
 	macros := item.Macros
 	usage := cloneUsage(item.IngredientUsage)
+	units := cloneUnits(item.IngredientUnits)
+	if units == nil {
+		units = map[string]ingredient.Unit{}
+	}
 
 	for _, modifier := range selectedModifiers {
 		unitPrice += modifier.PriceDeltaMinor
 		macros = macros.Add(modifier.MacroDelta)
 		mergeUsage(usage, modifier.IngredientUsage, 1)
+		mergeUnits(units, modifier.IngredientUnits)
 	}
 
 	line := OrderLine{
@@ -205,62 +275,83 @@ func (s *Service) AddLine(input AddLineInput) (OrderLine, error) {
 		Currency:           item.Currency,
 		ResolvedMacros:     macros.Scale(float64(input.Quantity)),
 		IngredientUsage:    scaleUsage(usage, float64(input.Quantity)),
+		IngredientUnits:    units,
 		SelectedModifiers:  selectedModifiers,
 	}
 
-	order.Lines = append(order.Lines, line)
-	s.orders[order.ID] = order
-	return cloneLine(line), nil
+	return s.repo.AddLine(ctx, locationID, order.ID, line)
 }
 
 func (s *Service) CloseCheck(ctx context.Context, input CloseCheckInput) (Order, error) {
-	s.mu.Lock()
-	order, ok := s.orders[input.OrderID]
-	if !ok {
-		s.mu.Unlock()
-		return Order{}, fmt.Errorf("order %s not found", input.OrderID)
-	}
-	if order.Status == OrderStatusClosed {
-		s.mu.Unlock()
-		return cloneOrder(order), nil
-	}
-	if order.Status == OrderStatusClosing {
-		s.mu.Unlock()
-		return Order{}, fmt.Errorf("order %s is already closing", input.OrderID)
+	if s.repo == nil {
+		return Order{}, fmt.Errorf("order repository is required")
 	}
 
-	total := orderTotal(order)
-	if input.Tender.AmountMinor < total {
-		s.mu.Unlock()
-		return Order{}, fmt.Errorf("tender amount %d is less than order total %d", input.Tender.AmountMinor, total)
+	locationID := strings.TrimSpace(input.LocationID)
+	orderID := strings.TrimSpace(input.OrderID)
+	if locationID == "" {
+		return Order{}, fmt.Errorf("%w: location id is required", ErrInvalidOrder)
 	}
-	order.Status = OrderStatusClosing
-	s.orders[order.ID] = order
-	s.mu.Unlock()
+	if orderID == "" {
+		return Order{}, fmt.Errorf("%w: order id is required", ErrInvalidOrder)
+	}
 
-	if err := s.payment.Process(ctx, input.Tender); err != nil {
-		s.mu.Lock()
-		order = s.orders[input.OrderID]
-		if order.Status == OrderStatusClosing {
-			order.Status = OrderStatusOpen
-			s.orders[order.ID] = order
-		}
-		s.mu.Unlock()
+	current, err := s.repo.Get(ctx, locationID, orderID)
+	if err != nil {
 		return Order{}, err
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	order = s.orders[input.OrderID]
-	if order.Status != OrderStatusClosing {
-		return Order{}, fmt.Errorf("order %s is not ready to close", input.OrderID)
+	if current.Status == OrderStatusClosed {
+		return current, nil
 	}
-	now := time.Now().UTC()
-	order.Status = OrderStatusClosed
-	order.ClosedAt = &now
-	s.orders[order.ID] = order
-	return cloneOrder(order), nil
+
+	tender, err := normalizeTender(current, input.Tender)
+	if err != nil {
+		return Order{}, err
+	}
+	if current.Status == OrderStatusClosing {
+		return s.finalizeClosingOrder(ctx, locationID, orderID, tender)
+	}
+
+	order, err := s.repo.StartClose(ctx, locationID, orderID, tender)
+	if err != nil {
+		return Order{}, err
+	}
+	if order.Status == OrderStatusClosed {
+		return order, nil
+	}
+
+	if err := s.payment.Process(ctx, tender); err != nil {
+		paymentErr := fmt.Errorf("%w: %v", ErrPaymentFailed, err)
+		if rollbackErr := s.repo.FailClose(backgroundCloseContext(ctx), locationID, orderID, tender.ID); rollbackErr != nil {
+			return Order{}, errors.Join(paymentErr, fmt.Errorf("reopen order after payment failure: %w", rollbackErr))
+		}
+		return Order{}, paymentErr
+	}
+
+	return s.finalizeClosingOrder(ctx, locationID, orderID, tender)
+}
+
+func backgroundCloseContext(ctx context.Context) context.Context {
+	closeCtx, _ := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	return closeCtx
+}
+
+func (s *Service) finalizeClosingOrder(ctx context.Context, locationID string, orderID string, tender Tender) (Order, error) {
+	closeCtx := backgroundCloseContext(ctx)
+	closed, err := s.repo.FinishClose(closeCtx, locationID, orderID, tender.ID, time.Now().UTC())
+	if err == nil {
+		return closed, nil
+	}
+	if !errors.Is(err, ErrInvalidOrder) {
+		return Order{}, err
+	}
+	if err := s.repo.MarkTenderSucceeded(closeCtx, locationID, orderID, tender.ID); err != nil {
+		if errors.Is(err, ErrInvalidOrder) {
+			return Order{}, ErrOrderAlreadyClosing
+		}
+		return Order{}, err
+	}
+	return s.repo.FinishClose(closeCtx, locationID, orderID, tender.ID, time.Now().UTC())
 }
 
 func ToClosedOrder(order Order) (contracts.ClosedOrder, error) {
@@ -276,14 +367,50 @@ func ToClosedOrder(order Order) (contracts.ClosedOrder, error) {
 			Quantity:        line.Quantity,
 			ResolvedMacros:  line.ResolvedMacros,
 			IngredientUsage: cloneUsage(line.IngredientUsage),
+			IngredientUnits: cloneUnits(line.IngredientUnits),
 		}
 	}
 
 	return contracts.ClosedOrder{
-		OrderID:  order.ID,
-		ClosedAt: order.ClosedAt.UTC(),
-		Lines:    lines,
+		OrderID:    order.ID,
+		LocationID: order.LocationID,
+		ClosedAt:   order.ClosedAt.UTC(),
+		Lines:      lines,
 	}, nil
+}
+
+func normalizeTender(order Order, input Tender) (Tender, error) {
+	tender := Tender{
+		ID:          strings.TrimSpace(input.ID),
+		CheckID:     strings.TrimSpace(input.CheckID),
+		AmountMinor: input.AmountMinor,
+		Currency:    strings.ToUpper(strings.TrimSpace(input.Currency)),
+		Kind:        strings.TrimSpace(input.Kind),
+	}
+
+	if tender.ID == "" {
+		return Tender{}, fmt.Errorf("%w: tender id is required", ErrInvalidOrder)
+	}
+	if tender.Kind == "" {
+		return Tender{}, fmt.Errorf("%w: tender kind is required", ErrInvalidOrder)
+	}
+	if tender.AmountMinor < 0 {
+		return Tender{}, fmt.Errorf("%w: tender amount must be non-negative", ErrInvalidOrder)
+	}
+	if tender.CheckID == "" {
+		tender.CheckID = order.CheckID
+	}
+	if tender.CheckID != order.CheckID {
+		return Tender{}, fmt.Errorf("%w: tender check id %s does not match order check id %s", ErrInvalidOrder, tender.CheckID, order.CheckID)
+	}
+	if tender.Currency == "" {
+		tender.Currency = order.Currency
+	}
+	if order.Currency != "" && tender.Currency != order.Currency {
+		return Tender{}, fmt.Errorf("%w: tender currency %s does not match order currency %s", ErrInvalidOrder, tender.Currency, order.Currency)
+	}
+
+	return tender, nil
 }
 
 func findSnapshotItem(snapshot recipe.MenuSnapshot, menuItemID string) (recipe.SnapshotItem, error) {
@@ -298,7 +425,11 @@ func findSnapshotItem(snapshot recipe.MenuSnapshot, menuItemID string) (recipe.S
 
 func selectModifiers(item recipe.SnapshotItem, selectedIDs []string) ([]recipe.SnapshotModifier, error) {
 	selected := map[string]bool{}
-	for _, id := range selectedIDs {
+	for _, rawID := range selectedIDs {
+		id := strings.TrimSpace(rawID)
+		if id == "" {
+			return nil, fmt.Errorf("modifier id is required")
+		}
 		if selected[id] {
 			return nil, fmt.Errorf("modifier %s selected multiple times", id)
 		}
@@ -332,21 +463,13 @@ func selectModifiers(item recipe.SnapshotItem, selectedIDs []string) ([]recipe.S
 		}
 	}
 
-	for _, id := range selectedIDs {
+	for id := range selected {
 		if !seen[id] {
 			return nil, fmt.Errorf("modifier %s not found for menu item %s", id, item.MenuItemID)
 		}
 	}
 
 	return out, nil
-}
-
-func orderTotal(order Order) int64 {
-	var total int64
-	for _, line := range order.Lines {
-		total += line.ResolvedPriceMinor
-	}
-	return total
 }
 
 func cloneOrder(order Order) Order {
@@ -361,6 +484,7 @@ func cloneOrder(order Order) Order {
 func cloneLine(line OrderLine) OrderLine {
 	out := line
 	out.IngredientUsage = cloneUsage(line.IngredientUsage)
+	out.IngredientUnits = cloneUnits(line.IngredientUnits)
 	out.SelectedModifiers = make([]recipe.SnapshotModifier, len(line.SelectedModifiers))
 	for i, modifier := range line.SelectedModifiers {
 		out.SelectedModifiers[i] = cloneModifier(modifier)
@@ -371,6 +495,7 @@ func cloneLine(line OrderLine) OrderLine {
 func cloneModifier(modifier recipe.SnapshotModifier) recipe.SnapshotModifier {
 	out := modifier
 	out.IngredientUsage = cloneUsage(modifier.IngredientUsage)
+	out.IngredientUnits = cloneUnits(modifier.IngredientUnits)
 	return out
 }
 
@@ -394,4 +519,25 @@ func scaleUsage(src map[string]float64, multiplier float64) map[string]float64 {
 		out[ingredientID] = qty * multiplier
 	}
 	return out
+}
+
+func cloneUnits(units map[string]ingredient.Unit) map[string]ingredient.Unit {
+	if len(units) == 0 {
+		return nil
+	}
+
+	out := make(map[string]ingredient.Unit, len(units))
+	for ingredientID, unit := range units {
+		out[ingredientID] = unit
+	}
+	return out
+}
+
+func mergeUnits(dst map[string]ingredient.Unit, src map[string]ingredient.Unit) {
+	if len(src) == 0 {
+		return
+	}
+	for ingredientID, unit := range src {
+		dst[ingredientID] = unit
+	}
 }

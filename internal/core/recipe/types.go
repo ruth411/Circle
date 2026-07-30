@@ -14,6 +14,7 @@ const (
 )
 
 type RecipeLine struct {
+	LineNumber int
 	TargetType LineTargetType
 	TargetID   string
 	Quantity   float64
@@ -27,6 +28,8 @@ type Recipe struct {
 	Name       string
 	YieldCount float64
 	Lines      []RecipeLine
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 type IngredientDelta struct {
@@ -56,6 +59,7 @@ type ModifierGroup struct {
 }
 
 type MenuItem struct {
+	LocationID     string
 	ID             string
 	RecipeID       string
 	Name           string
@@ -63,6 +67,8 @@ type MenuItem struct {
 	PriceMinor     int64
 	Currency       string
 	ModifierGroups []ModifierGroup
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 type SnapshotModifier struct {
@@ -72,6 +78,7 @@ type SnapshotModifier struct {
 	Currency        string
 	MacroDelta      ingredient.MacroValues
 	IngredientUsage map[string]float64
+	IngredientUnits map[string]ingredient.Unit
 }
 
 type SnapshotModifierGroup struct {
@@ -93,6 +100,7 @@ type SnapshotItem struct {
 	Currency        string
 	Macros          ingredient.MacroValues
 	IngredientUsage map[string]float64
+	IngredientUnits map[string]ingredient.Unit
 	ModifierGroups  []SnapshotModifierGroup
 }
 

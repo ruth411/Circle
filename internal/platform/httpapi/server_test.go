@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/ruth411/circle/internal/tenancy"
 )
 
 func TestHealthzReturnsJSONAndRequestID(t *testing.T) {
@@ -62,6 +64,27 @@ func TestUnknownRouteReturnsJSONError(t *testing.T) {
 	}
 }
 
+func TestMethodMismatchReturnsServeMux405(t *testing.T) {
+	server := NewServerWithDependencies(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		OrderingService:      seedOrderingService(),
+		SessionValidator:     seedSessionService(t, "loc-1"),
+		OrganizationResolver: tenancy.StaticOrganizationResolver{"loc-1": "org-1"},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/orders", nil)
+	req.Header.Set("X-Location-Id", "loc-1")
+	req.Header.Set(sessionIDHeader, "session-1")
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405, body = %s", recorder.Code, recorder.Body.String())
+	}
+	if allow := recorder.Header().Get("Allow"); allow != http.MethodPost {
+		t.Fatalf("Allow = %q, want %q", allow, http.MethodPost)
+	}
+}
+
 func TestRequestIDIsPresentInLogs(t *testing.T) {
 	var logBuffer bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logBuffer, nil))
@@ -76,5 +99,24 @@ func TestRequestIDIsPresentInLogs(t *testing.T) {
 	logOutput := logBuffer.String()
 	if !strings.Contains(logOutput, `"request_id":"req-log-1"`) {
 		t.Fatalf("log output missing request_id, got %q", logOutput)
+	}
+}
+
+func TestDinerTokensAreRedactedInLogs(t *testing.T) {
+	var logBuffer bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuffer, nil))
+	server := NewServer(logger)
+
+	req := httptest.NewRequest(http.MethodGet, "/diner/tokens/token-secret-1", nil)
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, req)
+
+	logOutput := logBuffer.String()
+	if strings.Contains(logOutput, "token-secret-1") {
+		t.Fatalf("log output leaked token, got %q", logOutput)
+	}
+	if !strings.Contains(logOutput, `"/diner/tokens/{token}"`) {
+		t.Fatalf("log output missing redacted path, got %q", logOutput)
 	}
 }

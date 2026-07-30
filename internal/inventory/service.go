@@ -1,16 +1,26 @@
 package inventory
 
 import (
+	"context"
+	"errors"
 	"fmt"
-	"sync"
+	"strings"
 	"time"
 
 	"github.com/ruth411/circle/internal/contracts"
 	"github.com/ruth411/circle/internal/core/ingredient"
 )
 
+var ErrInvalidClosedOrderData = errors.New("invalid closed order data")
+
+type Repository interface {
+	RecordDepletion(context.Context, contracts.ClosedOrder) ([]Movement, error)
+	ListMovements(context.Context, string) ([]Movement, error)
+}
+
 type Movement struct {
 	ID           string
+	LocationID   string
 	OrderID      string
 	IngredientID string
 	Quantity     float64
@@ -19,70 +29,37 @@ type Movement struct {
 }
 
 type Service struct {
-	mu        sync.Mutex
-	baseUnits map[string]ingredient.Unit
-	recorded  map[string]bool
-	movements []Movement
+	repo Repository
 }
 
-func NewService(baseUnits map[string]ingredient.Unit) *Service {
-	clonedBaseUnits := make(map[string]ingredient.Unit, len(baseUnits))
-	for ingredientID, unit := range baseUnits {
-		clonedBaseUnits[ingredientID] = unit
-	}
-
-	return &Service{
-		baseUnits: clonedBaseUnits,
-		recorded:  map[string]bool{},
-	}
+func NewService(repo Repository) *Service {
+	return &Service{repo: repo}
 }
 
-func (s *Service) RecordDepletion(order contracts.ClosedOrder) ([]Movement, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
+func (s *Service) RecordDepletion(ctx context.Context, order contracts.ClosedOrder) ([]Movement, error) {
+	if s.repo == nil {
+		return nil, fmt.Errorf("inventory repository is required")
+	}
+	order.LocationID = strings.TrimSpace(order.LocationID)
+	if order.LocationID == "" {
+		return nil, fmt.Errorf("%w: closed order location id is required", ErrInvalidClosedOrderData)
+	}
+	if strings.TrimSpace(order.OrderID) == "" {
+		return nil, fmt.Errorf("%w: closed order id is required", ErrInvalidClosedOrderData)
+	}
 	if order.ClosedAt.IsZero() {
-		return nil, fmt.Errorf("order %s must have a closed timestamp", order.OrderID)
+		return nil, fmt.Errorf("%w: order %s must have a closed timestamp", ErrInvalidClosedOrderData, order.OrderID)
 	}
-
-	if s.recorded[order.OrderID] {
-		return nil, nil
-	}
-
-	var movements []Movement
-	seq := 1
-	occurredAt := order.ClosedAt.UTC()
-
-	for _, line := range order.Lines {
-		for ingredientID, qty := range line.IngredientUsage {
-			unit, ok := s.baseUnits[ingredientID]
-			if !ok {
-				return nil, fmt.Errorf("missing base unit for ingredient %s", ingredientID)
-			}
-
-			movement := Movement{
-				ID:           fmt.Sprintf("%s-%d", order.OrderID, seq),
-				OrderID:      order.OrderID,
-				IngredientID: ingredientID,
-				Quantity:     -qty,
-				Unit:         unit,
-				OccurredAt:   occurredAt,
-			}
-			seq++
-			movements = append(movements, movement)
-			s.movements = append(s.movements, movement)
-		}
-	}
-
-	s.recorded[order.OrderID] = true
-	return movements, nil
+	return s.repo.RecordDepletion(ctx, order)
 }
 
-func (s *Service) Movements() []Movement {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	out := make([]Movement, len(s.movements))
-	copy(out, s.movements)
-	return out
+func (s *Service) Movements(ctx context.Context, locationID string) ([]Movement, error) {
+	if s.repo == nil {
+		return nil, fmt.Errorf("inventory repository is required")
+	}
+	locationID = strings.TrimSpace(locationID)
+	if locationID == "" {
+		return nil, fmt.Errorf("location id is required")
+	}
+	return s.repo.ListMovements(ctx, locationID)
 }

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -72,6 +73,48 @@ func TestRequireStaffSessionRejectsCrossLocationAccess(t *testing.T) {
 
 	if recorder.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", recorder.Code)
+	}
+}
+
+func TestRequireStaffSessionPassesRequestContextToValidator(t *testing.T) {
+	type contextKey string
+
+	const key contextKey = "probe"
+	validator := stubSessionValidator{
+		validateFn: func(ctx context.Context, sessionID string) (identity.Session, error) {
+			if sessionID != "session-1" {
+				t.Fatalf("sessionID = %q, want session-1", sessionID)
+			}
+			value, _ := ctx.Value(key).(string)
+			if value != "request-scope" {
+				t.Fatalf("context value = %q, want request-scope", value)
+			}
+			return identity.Session{
+				ID:             "session-1",
+				OrganizationID: "org-1",
+				ScopeType:      identity.ScopeTypeLocation,
+				LocationID:     "loc-1",
+			}, nil
+		},
+	}
+
+	handler := RequireStaffSession(validator, tenancy.StaticOrganizationResolver{
+		"loc-1": "org-1",
+	}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req = req.WithContext(context.WithValue(req.Context(), key, "request-scope"))
+	req.Header.Set("X-Location-Id", "loc-1")
+	req.Header.Set(sessionIDHeader, "session-1")
+	req = req.WithContext(tenancy.WithLocationID(req.Context(), "loc-1"))
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", recorder.Code)
 	}
 }
 
@@ -191,4 +234,12 @@ func TestNewServerStillBuildsWithoutAuthMiddleware(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", recorder.Code)
 	}
+}
+
+type stubSessionValidator struct {
+	validateFn func(context.Context, string) (identity.Session, error)
+}
+
+func (s stubSessionValidator) ValidateSession(ctx context.Context, sessionID string) (identity.Session, error) {
+	return s.validateFn(ctx, sessionID)
 }

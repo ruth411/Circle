@@ -1,6 +1,7 @@
 package identity
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -33,7 +34,7 @@ func TestIssueValidateAndRevokeSession(t *testing.T) {
 		t.Fatalf("session organization = %q, want org-1", session.OrganizationID)
 	}
 
-	validated, err := service.ValidateSession("session-1")
+	validated, err := service.ValidateSession(context.Background(), "session-1")
 	if err != nil {
 		t.Fatalf("ValidateSession returned error: %v", err)
 	}
@@ -44,7 +45,7 @@ func TestIssueValidateAndRevokeSession(t *testing.T) {
 	if err := service.RevokeSession("session-1"); err != nil {
 		t.Fatalf("RevokeSession returned error: %v", err)
 	}
-	if _, err := service.ValidateSession("session-1"); !errors.Is(err, ErrSessionRevoked) {
+	if _, err := service.ValidateSession(context.Background(), "session-1"); !errors.Is(err, ErrSessionRevoked) {
 		t.Fatalf("err = %v, want ErrSessionRevoked", err)
 	}
 }
@@ -70,7 +71,7 @@ func TestValidateSessionRejectsExpiredSession(t *testing.T) {
 	}
 
 	service.now = func() time.Time { return now.Add(2 * time.Minute) }
-	if _, err := service.ValidateSession("session-1"); !errors.Is(err, ErrSessionExpired) {
+	if _, err := service.ValidateSession(context.Background(), "session-1"); !errors.Is(err, ErrSessionExpired) {
 		t.Fatalf("err = %v, want ErrSessionExpired", err)
 	}
 }

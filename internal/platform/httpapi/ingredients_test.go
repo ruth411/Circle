@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -153,6 +154,33 @@ func TestIngredientUpdateRouteReturnsNotFound(t *testing.T) {
 
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", recorder.Code)
+	}
+}
+
+func TestIngredientCreateRouteRejectsOversizedBody(t *testing.T) {
+	service := ingredient.NewService(fakeIngredientRepository{
+		createFn: func(value ingredient.Ingredient) (ingredient.Ingredient, error) {
+			return value, nil
+		},
+	})
+
+	identityService := seedSessionService(t, "loc-1")
+	server := NewServerWithDependencies(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		IngredientService:    service,
+		SessionValidator:     identityService,
+		OrganizationResolver: tenancy.StaticOrganizationResolver{"loc-1": "org-1"},
+	})
+
+	body := `{"id":"ing-1","name":"` + strings.Repeat("x", int(maxIngredientRequestBodyBytes)) + `","category":"protein","base_unit":"each","macros_per_base_unit":{"calories":180},"currency":"USD","provenance":"restaurant_official","verification_status":"verified","serving_size_quantity":4,"serving_size_unit":"oz"}`
+	req := httptest.NewRequest(http.MethodPost, "/ingredients", strings.NewReader(body))
+	req.Header.Set("X-Location-Id", "loc-1")
+	req.Header.Set(sessionIDHeader, "session-1")
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", recorder.Code)
 	}
 }
 

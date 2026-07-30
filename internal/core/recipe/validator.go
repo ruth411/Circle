@@ -1,6 +1,10 @@
 package recipe
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/ruth411/circle/internal/core/ingredient"
+)
 
 func ValidateRecipeGraph(rootID string, recipes map[string]Recipe, maxDepth int) error {
 	if maxDepth < 1 {
@@ -45,6 +49,9 @@ func validateRecipe(recipeID string, recipes map[string]Recipe, maxDepth int, de
 		case LineTargetRecipe:
 			if line.TargetID == "" {
 				return fmt.Errorf("recipe %s has nested recipe line with empty target", recipeID)
+			}
+			if line.Unit != ingredient.UnitEach {
+				return fmt.Errorf("nested recipe %s must use unit %s", line.TargetID, ingredient.UnitEach)
 			}
 			if err := validateRecipe(line.TargetID, recipes, maxDepth, depth+1, stack); err != nil {
 				return err

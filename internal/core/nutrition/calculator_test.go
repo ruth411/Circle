@@ -16,6 +16,7 @@ func TestResolveRecipeRollsUpNestedRecipesAndConfidence(t *testing.T) {
 				ID:                 "chicken",
 				BaseUnit:           ingredient.UnitGram,
 				MacrosPerBaseUnit:  ingredient.MacroValues{Calories: 2, ProteinGrams: 0.3, FatGrams: 0.1},
+				CurrentCostMinor:   2,
 				VerificationStatus: ingredient.VerificationVerified,
 				YieldFactors:       map[string]float64{"cooked": 0.8},
 			},
@@ -23,6 +24,7 @@ func TestResolveRecipeRollsUpNestedRecipesAndConfidence(t *testing.T) {
 				ID:                 "rice",
 				BaseUnit:           ingredient.UnitGram,
 				MacrosPerBaseUnit:  ingredient.MacroValues{Calories: 1.2, CarbsGrams: 0.25},
+				CurrentCostMinor:   4,
 				VerificationStatus: ingredient.VerificationUnverified,
 			},
 		},
@@ -53,6 +55,12 @@ func TestResolveRecipeRollsUpNestedRecipesAndConfidence(t *testing.T) {
 	if got, want := resolved.TotalMacros.Calories, 440.0; !closeEnough(got, want) {
 		t.Fatalf("calories = %v, want %v", got, want)
 	}
+	if got, want := resolved.TotalCostMinor, int64(720); got != want {
+		t.Fatalf("total cost = %d, want %d", got, want)
+	}
+	if got, want := resolved.PerServingCostMinor, int64(720); got != want {
+		t.Fatalf("per serving cost = %d, want %d", got, want)
+	}
 	if got, want := resolved.TotalMacros.ProteinGrams, 48.0; !closeEnough(got, want) {
 		t.Fatalf("protein = %v, want %v", got, want)
 	}
@@ -71,6 +79,7 @@ func TestResolveModifierUsesSignedIngredientDeltas(t *testing.T) {
 				ID:                 "oil",
 				BaseUnit:           ingredient.UnitMilliliter,
 				MacrosPerBaseUnit:  ingredient.MacroValues{Calories: 8.8, FatGrams: 1},
+				CurrentCostMinor:   2,
 				VerificationStatus: ingredient.VerificationVerified,
 			},
 		},
@@ -90,6 +99,9 @@ func TestResolveModifierUsesSignedIngredientDeltas(t *testing.T) {
 
 	if got, want := resolved.MacroDelta.Calories, -44.0; !closeEnough(got, want) {
 		t.Fatalf("modifier calories = %v, want %v", got, want)
+	}
+	if got, want := resolved.CostDeltaMinor, int64(-10); got != want {
+		t.Fatalf("modifier cost = %d, want %d", got, want)
 	}
 	if got, want := resolved.IngredientUsage["oil"], -5.0; !closeEnough(got, want) {
 		t.Fatalf("modifier usage = %v, want %v", got, want)

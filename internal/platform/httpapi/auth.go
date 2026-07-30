@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -12,7 +13,7 @@ import (
 const sessionIDHeader = "X-Session-Id"
 
 type SessionValidator interface {
-	ValidateSession(string) (identity.Session, error)
+	ValidateSession(context.Context, string) (identity.Session, error)
 }
 
 func WithResolvedLocation(resolver tenancy.Resolver, next http.Handler) http.Handler {
@@ -35,7 +36,7 @@ func RequireStaffSession(validator SessionValidator, organizationResolver tenanc
 			return
 		}
 
-		session, err := validator.ValidateSession(sessionID)
+		session, err := validator.ValidateSession(r.Context(), sessionID)
 		if err != nil {
 			status := http.StatusUnauthorized
 			code := "invalid_session"
