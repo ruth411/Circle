@@ -13,19 +13,19 @@ func TestResolveRecipeRollsUpNestedRecipesAndConfidence(t *testing.T) {
 		MaxDepth: 8,
 		Ingredients: map[string]ingredient.Ingredient{
 			"chicken": {
-				ID:                 "chicken",
-				BaseUnit:           ingredient.UnitGram,
-				MacrosPerBaseUnit:  ingredient.MacroValues{Calories: 2, ProteinGrams: 0.3, FatGrams: 0.1},
-				CurrentCostMinor:   2,
-				VerificationStatus: ingredient.VerificationVerified,
-				YieldFactors:       map[string]float64{"cooked": 0.8},
+				ID:                     "chicken",
+				BaseUnit:               ingredient.UnitGram,
+				MacrosPerBaseUnit:      ingredient.MacroValues{Calories: 2, ProteinGrams: 0.3, FatGrams: 0.1},
+				CurrentCostPerBaseUnit: ingredient.MustCostPerBaseUnit(2.1234),
+				VerificationStatus:     ingredient.VerificationVerified,
+				YieldFactors:           map[string]float64{"cooked": 0.8},
 			},
 			"rice": {
-				ID:                 "rice",
-				BaseUnit:           ingredient.UnitGram,
-				MacrosPerBaseUnit:  ingredient.MacroValues{Calories: 1.2, CarbsGrams: 0.25},
-				CurrentCostMinor:   4,
-				VerificationStatus: ingredient.VerificationUnverified,
+				ID:                     "rice",
+				BaseUnit:               ingredient.UnitGram,
+				MacrosPerBaseUnit:      ingredient.MacroValues{Calories: 1.2, CarbsGrams: 0.25},
+				CurrentCostPerBaseUnit: ingredient.MustCostPerBaseUnit(4.5),
+				VerificationStatus:     ingredient.VerificationUnverified,
 			},
 		},
 		Recipes: map[string]recipe.Recipe{
@@ -55,10 +55,10 @@ func TestResolveRecipeRollsUpNestedRecipesAndConfidence(t *testing.T) {
 	if got, want := resolved.TotalMacros.Calories, 440.0; !closeEnough(got, want) {
 		t.Fatalf("calories = %v, want %v", got, want)
 	}
-	if got, want := resolved.TotalCostMinor, int64(720); got != want {
+	if got, want := resolved.TotalCostMinor, int64(790); got != want {
 		t.Fatalf("total cost = %d, want %d", got, want)
 	}
-	if got, want := resolved.PerServingCostMinor, int64(720); got != want {
+	if got, want := resolved.PerServingCostMinor, int64(790); got != want {
 		t.Fatalf("per serving cost = %d, want %d", got, want)
 	}
 	if got, want := resolved.TotalMacros.ProteinGrams, 48.0; !closeEnough(got, want) {
@@ -76,11 +76,11 @@ func TestResolveModifierUsesSignedIngredientDeltas(t *testing.T) {
 	calc := Calculator{
 		Ingredients: map[string]ingredient.Ingredient{
 			"oil": {
-				ID:                 "oil",
-				BaseUnit:           ingredient.UnitMilliliter,
-				MacrosPerBaseUnit:  ingredient.MacroValues{Calories: 8.8, FatGrams: 1},
-				CurrentCostMinor:   2,
-				VerificationStatus: ingredient.VerificationVerified,
+				ID:                     "oil",
+				BaseUnit:               ingredient.UnitMilliliter,
+				MacrosPerBaseUnit:      ingredient.MacroValues{Calories: 8.8, FatGrams: 1},
+				CurrentCostPerBaseUnit: ingredient.MustCostPerBaseUnit(2.125),
+				VerificationStatus:     ingredient.VerificationVerified,
 			},
 		},
 	}
@@ -100,11 +100,40 @@ func TestResolveModifierUsesSignedIngredientDeltas(t *testing.T) {
 	if got, want := resolved.MacroDelta.Calories, -44.0; !closeEnough(got, want) {
 		t.Fatalf("modifier calories = %v, want %v", got, want)
 	}
-	if got, want := resolved.CostDeltaMinor, int64(-10); got != want {
+	if got, want := resolved.CostDeltaMinor, int64(-11); got != want {
 		t.Fatalf("modifier cost = %d, want %d", got, want)
 	}
 	if got, want := resolved.IngredientUsage["oil"], -5.0; !closeEnough(got, want) {
 		t.Fatalf("modifier usage = %v, want %v", got, want)
+	}
+}
+
+func TestResolveModifierRoundsLowCostAccumulationCorrectly(t *testing.T) {
+	calc := Calculator{
+		Ingredients: map[string]ingredient.Ingredient{
+			"salt": {
+				ID:                     "salt",
+				BaseUnit:               ingredient.UnitGram,
+				MacrosPerBaseUnit:      ingredient.MacroValues{},
+				CurrentCostPerBaseUnit: ingredient.MustCostPerBaseUnit(0.0003),
+				VerificationStatus:     ingredient.VerificationVerified,
+			},
+		},
+	}
+
+	modifier := recipe.Modifier{
+		ID: "extra-salt",
+		IngredientDeltas: []recipe.IngredientDelta{
+			{IngredientID: "salt", Quantity: 5000, Unit: ingredient.UnitGram},
+		},
+	}
+
+	resolved, err := calc.ResolveModifier(modifier)
+	if err != nil {
+		t.Fatalf("ResolveModifier returned error: %v", err)
+	}
+	if got, want := resolved.CostDeltaMinor, int64(2); got != want {
+		t.Fatalf("modifier cost = %d, want %d", got, want)
 	}
 }
 

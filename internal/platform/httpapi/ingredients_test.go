@@ -96,7 +96,7 @@ func TestIngredientCreateRouteCreatesIngredient(t *testing.T) {
 		"category":"protein",
 		"base_unit":"each",
 		"macros_per_base_unit":{"calories":180,"protein_grams":32,"carbs_grams":0,"fat_grams":7},
-		"current_cost_minor":1299,
+		"current_cost_per_base_unit":12.3456,
 		"currency":"USD",
 		"on_hand_base_units":10,
 		"par_level_base_units":4,
@@ -116,6 +116,67 @@ func TestIngredientCreateRouteCreatesIngredient(t *testing.T) {
 
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201", recorder.Code)
+	}
+
+	var payload struct {
+		Ingredient ingredientResponse `json:"ingredient"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+	if got, want := payload.Ingredient.CurrentCostPerBaseUnit, 12.3456; got != want {
+		t.Fatalf("current cost per base unit = %v, want %v", got, want)
+	}
+}
+
+func TestIngredientCreateRouteRoundsCostToFourDecimals(t *testing.T) {
+	service := ingredient.NewService(fakeIngredientRepository{
+		createFn: func(value ingredient.Ingredient) (ingredient.Ingredient, error) {
+			return value, nil
+		},
+	})
+
+	identityService := seedSessionService(t, "loc-1")
+	server := NewServerWithDependencies(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		IngredientService:    service,
+		SessionValidator:     identityService,
+		OrganizationResolver: tenancy.StaticOrganizationResolver{"loc-1": "org-1"},
+	})
+
+	body := bytes.NewBufferString(`{
+		"id":"ing-1",
+		"name":"Chicken",
+		"category":"protein",
+		"base_unit":"each",
+		"macros_per_base_unit":{"calories":180,"protein_grams":32,"carbs_grams":0,"fat_grams":7},
+		"current_cost_per_base_unit":1.45678999,
+		"currency":"USD",
+		"on_hand_base_units":10,
+		"par_level_base_units":4,
+		"provenance":"restaurant_official",
+		"verification_status":"verified",
+		"serving_size_quantity":4,
+		"serving_size_unit":"oz"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/ingredients", body)
+	req.Header.Set("X-Location-Id", "loc-1")
+	req.Header.Set(sessionIDHeader, "session-1")
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", recorder.Code)
+	}
+
+	var payload struct {
+		Ingredient ingredientResponse `json:"ingredient"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+	if got, want := payload.Ingredient.CurrentCostPerBaseUnit, 1.4568; got != want {
+		t.Fatalf("current cost per base unit = %v, want %v", got, want)
 	}
 }
 
