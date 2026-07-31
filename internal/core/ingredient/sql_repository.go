@@ -17,6 +17,10 @@ type sqlQueryer interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
+type sqlExecContext interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
 func NewSQLRepository(db *sql.DB) *SQLRepository {
 	return &SQLRepository{db: db}
 }
@@ -46,6 +50,8 @@ SELECT
     verification_status,
     serving_size_quantity,
     serving_size_unit,
+    ROUND(COALESCE(last_received_cost_per_base_unit, 0) * 10000)::BIGINT AS last_received_cost_per_base_unit_scaled,
+    last_received_at,
     created_at,
     updated_at
 FROM ingredient.ingredients
@@ -329,6 +335,8 @@ SELECT
     verification_status,
     serving_size_quantity,
     serving_size_unit,
+    ROUND(COALESCE(last_received_cost_per_base_unit, 0) * 10000)::BIGINT AS last_received_cost_per_base_unit_scaled,
+    last_received_at,
     created_at,
     updated_at
 FROM ingredient.ingredients
@@ -362,6 +370,7 @@ func scanIngredient(scanner ingredientScanner) (Ingredient, error) {
 	var baseUnit string
 	var provenance string
 	var verificationStatus string
+	var lastReceivedAt sql.NullTime
 
 	err := scanner.Scan(
 		&ingredient.ID,
@@ -382,6 +391,8 @@ func scanIngredient(scanner ingredientScanner) (Ingredient, error) {
 		&verificationStatus,
 		&ingredient.ServingSizeQuantity,
 		&ingredient.ServingSizeUnit,
+		(*int64)(&ingredient.LastReceivedCostPerBaseUnit),
+		&lastReceivedAt,
 		&ingredient.CreatedAt,
 		&ingredient.UpdatedAt,
 	)
@@ -392,7 +403,24 @@ func scanIngredient(scanner ingredientScanner) (Ingredient, error) {
 	ingredient.BaseUnit = Unit(baseUnit)
 	ingredient.Provenance = Provenance(provenance)
 	ingredient.VerificationStatus = VerificationStatus(verificationStatus)
+	if lastReceivedAt.Valid {
+		value := lastReceivedAt.Time.UTC()
+		ingredient.LastReceivedAt = &value
+	}
 	return ingredient, nil
+}
+
+func ApplyReceivedCostSQL(ctx context.Context, db sqlExecContext, update CostUpdate) error {
+	_, err := db.ExecContext(ctx, `
+UPDATE ingredient.ingredients
+SET current_cost_per_base_unit = ($3::NUMERIC / 10000.0),
+    last_received_cost_per_base_unit = ($3::NUMERIC / 10000.0),
+    last_received_at = $4,
+    updated_at = NOW()
+WHERE location_id = $1
+  AND id = $2;
+`, update.LocationID, update.IngredientID, int64(update.CostPerBaseUnit), update.ReceivedAt.UTC())
+	return err
 }
 
 func loadUnits(ctx context.Context, db sqlQueryer, ingredient *Ingredient) error {

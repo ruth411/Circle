@@ -15,6 +15,7 @@ import (
 	"github.com/ruth411/circle/internal/core/ingredient"
 	"github.com/ruth411/circle/internal/diner"
 	"github.com/ruth411/circle/internal/ordering"
+	"github.com/ruth411/circle/internal/purchasing"
 	"github.com/ruth411/circle/internal/tenancy"
 )
 
@@ -40,6 +41,7 @@ type Dependencies struct {
 	IngredientService    *ingredient.Service
 	DinerService         *diner.Service
 	OrderingService      *ordering.Service
+	PurchasingService    *purchasing.Service
 	SessionValidator     SessionValidator
 	LocationResolver     tenancy.Resolver
 	OrganizationResolver tenancy.OrganizationResolver
@@ -57,6 +59,12 @@ func NewServerWithDependencies(logger *slog.Logger, deps Dependencies) http.Hand
 	})
 	registerOrderingRoutes(mux, orderingDependencies{
 		service:              deps.OrderingService,
+		locationResolver:     deps.LocationResolver,
+		organizationResolver: deps.OrganizationResolver,
+		sessionValidator:     deps.SessionValidator,
+	})
+	registerPurchasingRoutes(mux, purchasingDependencies{
+		service:              deps.PurchasingService,
 		locationResolver:     deps.LocationResolver,
 		organizationResolver: deps.OrganizationResolver,
 		sessionValidator:     deps.SessionValidator,

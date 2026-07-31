@@ -79,25 +79,34 @@ func (m MacroValues) Scale(multiplier float64) MacroValues {
 }
 
 type Ingredient struct {
-	ID                     string
-	LocationID             string
-	SourceItemID           string
-	Name                   string
-	Category               string
-	BaseUnit               Unit
-	AlternateUnits         map[Unit]float64
-	MacrosPerBaseUnit      MacroValues
-	CurrentCostPerBaseUnit CostPerBaseUnit
-	Currency               string
-	OnHandBaseUnits        float64
-	ParLevelBaseUnits      float64
-	Provenance             Provenance
-	VerificationStatus     VerificationStatus
-	ServingSizeQuantity    float64
-	ServingSizeUnit        string
-	YieldFactors           map[string]float64
-	CreatedAt              time.Time
-	UpdatedAt              time.Time
+	ID                          string
+	LocationID                  string
+	SourceItemID                string
+	Name                        string
+	Category                    string
+	BaseUnit                    Unit
+	AlternateUnits              map[Unit]float64
+	MacrosPerBaseUnit           MacroValues
+	CurrentCostPerBaseUnit      CostPerBaseUnit
+	Currency                    string
+	OnHandBaseUnits             float64
+	ParLevelBaseUnits           float64
+	Provenance                  Provenance
+	VerificationStatus          VerificationStatus
+	ServingSizeQuantity         float64
+	ServingSizeUnit             string
+	YieldFactors                map[string]float64
+	LastReceivedCostPerBaseUnit CostPerBaseUnit
+	LastReceivedAt              *time.Time
+	CreatedAt                   time.Time
+	UpdatedAt                   time.Time
+}
+
+type CostUpdate struct {
+	LocationID      string
+	IngredientID    string
+	CostPerBaseUnit CostPerBaseUnit
+	ReceivedAt      time.Time
 }
 
 func (i Ingredient) ToBaseUnit(quantity float64, unit Unit) (float64, error) {

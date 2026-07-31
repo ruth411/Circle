@@ -66,6 +66,14 @@ func TestProjectMigrationsIncludePhase1Tables(t *testing.T) {
 		"CREATE TABLE IF NOT EXISTS diner.claims",
 		"CREATE TABLE IF NOT EXISTS diner.claim_items",
 		"ADD COLUMN IF NOT EXISTS current_cost_per_base_unit",
+		"ADD COLUMN IF NOT EXISTS last_received_cost_per_base_unit",
+		"ADD COLUMN IF NOT EXISTS last_received_at",
+		"CREATE TABLE IF NOT EXISTS purchasing.vendors",
+		"CREATE TABLE IF NOT EXISTS purchasing.vendor_items",
+		"CREATE TABLE IF NOT EXISTS purchasing.purchase_orders",
+		"CREATE TABLE IF NOT EXISTS purchasing.purchase_order_lines",
+		"CREATE TABLE IF NOT EXISTS purchasing.receipts",
+		"CREATE TABLE IF NOT EXISTS purchasing.receipt_lines",
 		"ALTER COLUMN location_id DROP NOT NULL",
 	}
 
