@@ -21,6 +21,7 @@ import (
 	"github.com/ruth411/circle/internal/platform/db"
 	"github.com/ruth411/circle/internal/platform/events"
 	"github.com/ruth411/circle/internal/platform/httpapi"
+	"github.com/ruth411/circle/internal/purchasing"
 	"github.com/ruth411/circle/internal/tenancy"
 	projectmigrations "github.com/ruth411/circle/migrations"
 
@@ -66,7 +67,8 @@ func main() {
 	}
 
 	addr := ":" + cfg.Port
-	ingredientService := ingredient.NewService(ingredient.NewSQLRepository(database))
+	ingredientRepository := ingredient.NewSQLRepository(database)
+	ingredientService := ingredient.NewService(ingredientRepository)
 	recipeRepository := recipe.NewSQLRepository(database)
 	outbox := events.NewSQLOutbox(database)
 	orderingService := ordering.NewServiceWithDependencies(ordering.NewSQLRepository(database), recipeRepository, ordering.MockProvider{})
@@ -74,6 +76,7 @@ func main() {
 	inventoryProcessor := inventory.NewProcessor(outbox, inventoryService)
 	dinerService := diner.NewServiceWithRepository(diner.NewSQLRepository(database))
 	dinerProcessor := diner.NewProcessor(outbox, dinerService)
+	purchasingService := purchasing.NewService(purchasing.NewSQLRepository(database), ingredientRepository)
 	sessionValidator := identity.NewSQLSessionValidator(database)
 
 	go runInventoryProcessor(ctx, logger, inventoryProcessor)
@@ -85,6 +88,7 @@ func main() {
 			IngredientService:    ingredientService,
 			DinerService:         dinerService,
 			OrderingService:      orderingService,
+			PurchasingService:    purchasingService,
 			SessionValidator:     sessionValidator,
 			OrganizationResolver: tenancy.NewSQLOrganizationResolver(database),
 		}),

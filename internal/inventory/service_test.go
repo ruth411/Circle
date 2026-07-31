@@ -149,6 +149,130 @@ func TestRecordDepletionUsesClosedOrderUnitSnapshot(t *testing.T) {
 	}
 }
 
+func TestRecordReceiptIsAppendOnlyAndIdempotent(t *testing.T) {
+	now := time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC)
+	service := NewService(newMemoryRepository(nil))
+
+	receipt := contracts.PurchaseReceipt{
+		ReceiptID:  "rec-1",
+		LocationID: "loc-1",
+		OccurredAt: now,
+		SourceType: contracts.PurchaseReceiptSourceType,
+		SourceID:   "rec-1",
+		Lines: []contracts.PurchaseReceiptLine{
+			{
+				IngredientID:      "chicken",
+				QuantityBaseUnits: 1500,
+				Unit:              ingredient.UnitGram,
+			},
+		},
+	}
+
+	movements, err := service.RecordReceipt(context.Background(), receipt)
+	if err != nil {
+		t.Fatalf("RecordReceipt returned error: %v", err)
+	}
+	if len(movements) != 1 {
+		t.Fatalf("movement count = %d, want 1", len(movements))
+	}
+	if movements[0].Quantity != 1500 {
+		t.Fatalf("movement quantity = %v, want 1500", movements[0].Quantity)
+	}
+	if movements[0].SourceType != contracts.PurchaseReceiptSourceType {
+		t.Fatalf("movement source type = %q, want %q", movements[0].SourceType, contracts.PurchaseReceiptSourceType)
+	}
+	if movements[0].SourceID != "rec-1" {
+		t.Fatalf("movement source id = %q, want rec-1", movements[0].SourceID)
+	}
+
+	movements, err = service.RecordReceipt(context.Background(), receipt)
+	if err != nil {
+		t.Fatalf("second RecordReceipt returned error: %v", err)
+	}
+	if len(movements) != 0 {
+		t.Fatalf("second call produced %d movements, want 0", len(movements))
+	}
+}
+
+func TestRecordReceiptAggregatesSameIngredientLines(t *testing.T) {
+	now := time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC)
+	service := NewService(newMemoryRepository(nil))
+
+	receipt := contracts.PurchaseReceipt{
+		ReceiptID:  "rec-1",
+		LocationID: "loc-1",
+		OccurredAt: now,
+		SourceType: contracts.PurchaseReceiptSourceType,
+		SourceID:   "rec-1",
+		Lines: []contracts.PurchaseReceiptLine{
+			{
+				IngredientID:      "chicken",
+				QuantityBaseUnits: 1500,
+				Unit:              ingredient.UnitGram,
+			},
+			{
+				IngredientID:      "chicken",
+				QuantityBaseUnits: 500,
+				Unit:              ingredient.UnitGram,
+			},
+		},
+	}
+
+	movements, err := service.RecordReceipt(context.Background(), receipt)
+	if err != nil {
+		t.Fatalf("RecordReceipt returned error: %v", err)
+	}
+	if len(movements) != 1 {
+		t.Fatalf("movement count = %d, want 1", len(movements))
+	}
+	if movements[0].Quantity != 2000 {
+		t.Fatalf("movement quantity = %v, want 2000", movements[0].Quantity)
+	}
+}
+
+func TestMovementIDsAreNamespacedBySourceType(t *testing.T) {
+	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
+	service := NewService(newMemoryRepository(nil))
+
+	depletion, err := service.RecordDepletion(context.Background(), contracts.ClosedOrder{
+		OrderID:    "shared-1",
+		LocationID: "loc-1",
+		ClosedAt:   now,
+		Lines: []contracts.ClosedOrderLine{
+			{
+				LineID:          "line-1",
+				IngredientUsage: map[string]float64{"chicken": 100},
+				IngredientUnits: map[string]ingredient.Unit{"chicken": ingredient.UnitGram},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RecordDepletion returned error: %v", err)
+	}
+
+	receipt, err := service.RecordReceipt(context.Background(), contracts.PurchaseReceipt{
+		ReceiptID:  "shared-1",
+		LocationID: "loc-1",
+		OccurredAt: now,
+		SourceType: contracts.PurchaseReceiptSourceType,
+		SourceID:   "shared-1",
+		Lines: []contracts.PurchaseReceiptLine{
+			{
+				IngredientID:      "chicken",
+				QuantityBaseUnits: 100,
+				Unit:              ingredient.UnitGram,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RecordReceipt returned error: %v", err)
+	}
+
+	if depletion[0].ID == receipt[0].ID {
+		t.Fatalf("movement ids = %q and %q, want distinct ids across source types", depletion[0].ID, receipt[0].ID)
+	}
+}
+
 func TestProcessPendingClosedOrdersSkipsMalformedEventAndContinues(t *testing.T) {
 	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
 	validOrder := contracts.ClosedOrder{

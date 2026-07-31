@@ -33,23 +33,23 @@ func TestCreateNormalizesAndValidatesIngredient(t *testing.T) {
 	service := NewService(repo)
 
 	ingredient, err := service.Create(context.Background(), UpsertInput{
-		ID:                  " ing-1 ",
-		LocationID:          " loc-1 ",
-		SourceItemID:        " cmg-1 ",
-		Name:                " Chicken ",
-		Category:            " protein ",
-		BaseUnit:            UnitEach,
-		AlternateUnits:      map[Unit]float64{UnitGram: 28.35},
-		MacrosPerBaseUnit:   MacroValues{Calories: 180, ProteinGrams: 32, CarbsGrams: 0, FatGrams: 7},
-		CurrentCostMinor:    1299,
-		Currency:            " usd ",
-		OnHandBaseUnits:     12,
-		ParLevelBaseUnits:   4,
-		Provenance:          ProvenanceRestaurantOfficial,
-		VerificationStatus:  VerificationVerified,
-		ServingSizeQuantity: 4,
-		ServingSizeUnit:     " oz ",
-		YieldFactors:        map[string]float64{" cooked ": 0.84},
+		ID:                     " ing-1 ",
+		LocationID:             " loc-1 ",
+		SourceItemID:           " cmg-1 ",
+		Name:                   " Chicken ",
+		Category:               " protein ",
+		BaseUnit:               UnitEach,
+		AlternateUnits:         map[Unit]float64{UnitGram: 28.35},
+		MacrosPerBaseUnit:      MacroValues{Calories: 180, ProteinGrams: 32, CarbsGrams: 0, FatGrams: 7},
+		CurrentCostPerBaseUnit: 12.3456,
+		Currency:               " usd ",
+		OnHandBaseUnits:        12,
+		ParLevelBaseUnits:      4,
+		Provenance:             ProvenanceRestaurantOfficial,
+		VerificationStatus:     VerificationVerified,
+		ServingSizeQuantity:    4,
+		ServingSizeUnit:        " oz ",
+		YieldFactors:           map[string]float64{" cooked ": 0.84},
 	})
 	if err != nil {
 		t.Fatalf("Create returned error: %v", err)
@@ -72,6 +72,9 @@ func TestCreateNormalizesAndValidatesIngredient(t *testing.T) {
 	}
 	if ingredient.YieldFactors["cooked"] != 0.84 {
 		t.Fatalf("yield factor = %v, want 0.84", ingredient.YieldFactors["cooked"])
+	}
+	if ingredient.CurrentCostPerBaseUnit.Float64() != 12.3456 {
+		t.Fatalf("current cost per base unit = %v, want 12.3456", ingredient.CurrentCostPerBaseUnit.Float64())
 	}
 }
 
@@ -97,6 +100,64 @@ func TestCreateRejectsInvalidIngredient(t *testing.T) {
 	})
 	if !errors.Is(err, ErrInvalidIngredient) {
 		t.Fatalf("err = %v, want ErrInvalidIngredient", err)
+	}
+}
+
+func TestCreateRoundsCostToFourDecimals(t *testing.T) {
+	service := NewService(fakeRepository{
+		createFn: func(_ context.Context, ingredient Ingredient) (Ingredient, error) {
+			return ingredient, nil
+		},
+	})
+
+	ingredient, err := service.Create(context.Background(), UpsertInput{
+		ID:                     "ing-1",
+		LocationID:             "loc-1",
+		Name:                   "Chicken",
+		Category:               "protein",
+		BaseUnit:               UnitEach,
+		MacrosPerBaseUnit:      MacroValues{Calories: 180},
+		CurrentCostPerBaseUnit: 1.45678999,
+		Currency:               "USD",
+		Provenance:             ProvenanceRestaurantOfficial,
+		VerificationStatus:     VerificationVerified,
+		ServingSizeQuantity:    4,
+		ServingSizeUnit:        "oz",
+	})
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	if got, want := ingredient.CurrentCostPerBaseUnit.Float64(), 1.4568; got != want {
+		t.Fatalf("current cost per base unit = %v, want %v", got, want)
+	}
+}
+
+func TestCreateAcceptsLargeFourDecimalCost(t *testing.T) {
+	service := NewService(fakeRepository{
+		createFn: func(_ context.Context, ingredient Ingredient) (Ingredient, error) {
+			return ingredient, nil
+		},
+	})
+
+	ingredient, err := service.Create(context.Background(), UpsertInput{
+		ID:                     "ing-1",
+		LocationID:             "loc-1",
+		Name:                   "Lobster Tail",
+		Category:               "protein",
+		BaseUnit:               UnitEach,
+		MacrosPerBaseUnit:      MacroValues{Calories: 180},
+		CurrentCostPerBaseUnit: 12345.6789,
+		Currency:               "USD",
+		Provenance:             ProvenanceRestaurantOfficial,
+		VerificationStatus:     VerificationVerified,
+		ServingSizeQuantity:    1,
+		ServingSizeUnit:        "each",
+	})
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	if got, want := ingredient.CurrentCostPerBaseUnit.Float64(), 12345.6789; got != want {
+		t.Fatalf("current cost per base unit = %v, want %v", got, want)
 	}
 }
 

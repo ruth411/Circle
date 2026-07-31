@@ -29,8 +29,8 @@ type ResolvedRecipe struct {
 	IngredientUnits     map[string]ingredient.Unit
 	Confidence          Confidence
 
-	totalCostMinorExact      float64
-	perServingCostMinorExact float64
+	totalCostScaledExact      float64
+	perServingCostScaledExact float64
 }
 
 type ResolvedModifier struct {
@@ -58,7 +58,7 @@ func (c Calculator) ResolveRecipe(recipeID string) (ResolvedRecipe, error) {
 func (c Calculator) ResolveModifier(modifier recipe.Modifier) (ResolvedModifier, error) {
 	confidence := Confidence{Level: ConfidenceHigh}
 	total := ingredient.MacroValues{}
-	totalCost := 0.0
+	totalCostScaled := 0.0
 	usage := map[string]float64{}
 	units := map[string]ingredient.Unit{}
 
@@ -88,7 +88,7 @@ func (c Calculator) ResolveModifier(modifier recipe.Modifier) (ResolvedModifier,
 		}
 
 		total = total.Add(ing.MacrosPerBaseUnit.Scale(signedQty))
-		totalCost += float64(ing.CurrentCostMinor) * signedQty
+		totalCostScaled += ing.CurrentCostPerBaseUnit.ScaledForQuantity(signedQty)
 		usage[ing.ID] += signedQty
 		units[ing.ID] = ing.BaseUnit
 
@@ -99,7 +99,7 @@ func (c Calculator) ResolveModifier(modifier recipe.Modifier) (ResolvedModifier,
 
 	return ResolvedModifier{
 		MacroDelta:      total,
-		CostDeltaMinor:  roundMinor(totalCost),
+		CostDeltaMinor:  roundMinorFromScaled(totalCostScaled),
 		IngredientUsage: usage,
 		IngredientUnits: units,
 		Confidence:      confidence,
@@ -125,7 +125,7 @@ func (c Calculator) resolveRecipe(recipeID string, depth int, stack map[string]b
 
 	confidence := Confidence{Level: ConfidenceHigh}
 	total := ingredient.MacroValues{}
-	totalCost := 0.0
+	totalCostScaled := 0.0
 	usage := map[string]float64{}
 	units := map[string]ingredient.Unit{}
 
@@ -152,7 +152,7 @@ func (c Calculator) resolveRecipe(recipeID string, depth int, stack map[string]b
 			}
 
 			total = total.Add(ing.MacrosPerBaseUnit.Scale(baseQty))
-			totalCost += float64(ing.CurrentCostMinor) * baseQty
+			totalCostScaled += ing.CurrentCostPerBaseUnit.ScaledForQuantity(baseQty)
 			usage[ing.ID] += baseQty
 			units[ing.ID] = ing.BaseUnit
 
@@ -170,7 +170,7 @@ func (c Calculator) resolveRecipe(recipeID string, depth int, stack map[string]b
 			}
 
 			total = total.Add(child.PerServing.Scale(line.Quantity))
-			totalCost += child.perServingCostMinorExact * line.Quantity
+			totalCostScaled += child.perServingCostScaledExact * line.Quantity
 			mergeUsage(usage, child.IngredientUsage, line.Quantity)
 			mergeUnits(units, child.IngredientUnits)
 			confidence.merge(child.Confidence)
@@ -185,18 +185,18 @@ func (c Calculator) resolveRecipe(recipeID string, depth int, stack map[string]b
 		confidence.downgrade(ConfidenceLow, fmt.Sprintf("recipe %s has non-positive yield count", current.ID))
 	}
 
-	perServingCost := totalCost / yieldCount
+	perServingCostScaled := totalCostScaled / yieldCount
 
 	return ResolvedRecipe{
-		TotalMacros:              total,
-		PerServing:               total.Scale(1 / yieldCount),
-		TotalCostMinor:           roundMinor(totalCost),
-		PerServingCostMinor:      roundMinor(perServingCost),
-		IngredientUsage:          usage,
-		IngredientUnits:          units,
-		Confidence:               confidence,
-		totalCostMinorExact:      totalCost,
-		perServingCostMinorExact: perServingCost,
+		TotalMacros:               total,
+		PerServing:                total.Scale(1 / yieldCount),
+		TotalCostMinor:            roundMinorFromScaled(totalCostScaled),
+		PerServingCostMinor:       roundMinorFromScaled(perServingCostScaled),
+		IngredientUsage:           usage,
+		IngredientUnits:           units,
+		Confidence:                confidence,
+		totalCostScaledExact:      totalCostScaled,
+		perServingCostScaledExact: perServingCostScaled,
 	}, nil
 }
 
@@ -251,4 +251,8 @@ func roundMinor(value float64) int64 {
 		return int64(value - 0.5)
 	}
 	return int64(value + 0.5)
+}
+
+func roundMinorFromScaled(value float64) int64 {
+	return roundMinor(value / 10000)
 }

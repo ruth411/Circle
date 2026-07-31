@@ -24,23 +24,23 @@ type Service struct {
 }
 
 type UpsertInput struct {
-	ID                  string
-	LocationID          string
-	SourceItemID        string
-	Name                string
-	Category            string
-	BaseUnit            Unit
-	AlternateUnits      map[Unit]float64
-	MacrosPerBaseUnit   MacroValues
-	CurrentCostMinor    int64
-	Currency            string
-	OnHandBaseUnits     float64
-	ParLevelBaseUnits   float64
-	Provenance          Provenance
-	VerificationStatus  VerificationStatus
-	ServingSizeQuantity float64
-	ServingSizeUnit     string
-	YieldFactors        map[string]float64
+	ID                     string
+	LocationID             string
+	SourceItemID           string
+	Name                   string
+	Category               string
+	BaseUnit               Unit
+	AlternateUnits         map[Unit]float64
+	MacrosPerBaseUnit      MacroValues
+	CurrentCostPerBaseUnit float64
+	Currency               string
+	OnHandBaseUnits        float64
+	ParLevelBaseUnits      float64
+	Provenance             Provenance
+	VerificationStatus     VerificationStatus
+	ServingSizeQuantity    float64
+	ServingSizeUnit        string
+	YieldFactors           map[string]float64
 }
 
 func NewService(repo Repository) *Service {
@@ -75,23 +75,23 @@ func (s *Service) Update(ctx context.Context, input UpsertInput) (Ingredient, er
 
 func normalizeIngredient(input UpsertInput, requireID bool) (Ingredient, error) {
 	ingredient := Ingredient{
-		ID:                  strings.TrimSpace(input.ID),
-		LocationID:          strings.TrimSpace(input.LocationID),
-		SourceItemID:        strings.TrimSpace(input.SourceItemID),
-		Name:                strings.TrimSpace(input.Name),
-		Category:            strings.TrimSpace(input.Category),
-		BaseUnit:            Unit(strings.TrimSpace(string(input.BaseUnit))),
-		AlternateUnits:      normalizeAlternateUnits(input.AlternateUnits),
-		MacrosPerBaseUnit:   input.MacrosPerBaseUnit,
-		CurrentCostMinor:    input.CurrentCostMinor,
-		Currency:            strings.ToUpper(strings.TrimSpace(input.Currency)),
-		OnHandBaseUnits:     input.OnHandBaseUnits,
-		ParLevelBaseUnits:   input.ParLevelBaseUnits,
-		Provenance:          Provenance(strings.TrimSpace(string(input.Provenance))),
-		VerificationStatus:  VerificationStatus(strings.TrimSpace(string(input.VerificationStatus))),
-		ServingSizeQuantity: input.ServingSizeQuantity,
-		ServingSizeUnit:     strings.TrimSpace(input.ServingSizeUnit),
-		YieldFactors:        normalizeYieldFactors(input.YieldFactors),
+		ID:                     strings.TrimSpace(input.ID),
+		LocationID:             strings.TrimSpace(input.LocationID),
+		SourceItemID:           strings.TrimSpace(input.SourceItemID),
+		Name:                   strings.TrimSpace(input.Name),
+		Category:               strings.TrimSpace(input.Category),
+		BaseUnit:               Unit(strings.TrimSpace(string(input.BaseUnit))),
+		AlternateUnits:         normalizeAlternateUnits(input.AlternateUnits),
+		MacrosPerBaseUnit:      input.MacrosPerBaseUnit,
+		CurrentCostPerBaseUnit: NewCostPerBaseUnit(input.CurrentCostPerBaseUnit),
+		Currency:               strings.ToUpper(strings.TrimSpace(input.Currency)),
+		OnHandBaseUnits:        input.OnHandBaseUnits,
+		ParLevelBaseUnits:      input.ParLevelBaseUnits,
+		Provenance:             Provenance(strings.TrimSpace(string(input.Provenance))),
+		VerificationStatus:     VerificationStatus(strings.TrimSpace(string(input.VerificationStatus))),
+		ServingSizeQuantity:    input.ServingSizeQuantity,
+		ServingSizeUnit:        strings.TrimSpace(input.ServingSizeUnit),
+		YieldFactors:           normalizeYieldFactors(input.YieldFactors),
 	}
 
 	if err := validateIngredient(ingredient, requireID); err != nil {
@@ -117,7 +117,7 @@ func validateIngredient(ingredient Ingredient, requireID bool) error {
 	if !validUnit(ingredient.BaseUnit) {
 		return fmt.Errorf("%w: base unit is invalid", ErrInvalidIngredient)
 	}
-	if ingredient.CurrentCostMinor < 0 {
+	if ingredient.CurrentCostPerBaseUnit < 0 {
 		return fmt.Errorf("%w: current cost must be non-negative", ErrInvalidIngredient)
 	}
 	if ingredient.Currency == "" {

@@ -12,15 +12,19 @@ import (
 )
 
 var ErrInvalidClosedOrderData = errors.New("invalid closed order data")
+var ErrInvalidReceiptData = errors.New("invalid receipt data")
 
 type Repository interface {
 	RecordDepletion(context.Context, contracts.ClosedOrder) ([]Movement, error)
+	RecordReceipt(context.Context, contracts.PurchaseReceipt) ([]Movement, error)
 	ListMovements(context.Context, string) ([]Movement, error)
 }
 
 type Movement struct {
 	ID           string
 	LocationID   string
+	SourceType   string
+	SourceID     string
 	OrderID      string
 	IngredientID string
 	Quantity     float64
@@ -62,4 +66,42 @@ func (s *Service) Movements(ctx context.Context, locationID string) ([]Movement,
 		return nil, fmt.Errorf("location id is required")
 	}
 	return s.repo.ListMovements(ctx, locationID)
+}
+
+func (s *Service) RecordReceipt(ctx context.Context, receipt contracts.PurchaseReceipt) ([]Movement, error) {
+	if s.repo == nil {
+		return nil, fmt.Errorf("inventory repository is required")
+	}
+	receipt.LocationID = strings.TrimSpace(receipt.LocationID)
+	receipt.ReceiptID = strings.TrimSpace(receipt.ReceiptID)
+	if receipt.LocationID == "" {
+		return nil, fmt.Errorf("%w: receipt location id is required", ErrInvalidReceiptData)
+	}
+	if receipt.ReceiptID == "" {
+		return nil, fmt.Errorf("%w: receipt id is required", ErrInvalidReceiptData)
+	}
+	if receipt.OccurredAt.IsZero() {
+		return nil, fmt.Errorf("%w: receipt %s must have an occurred timestamp", ErrInvalidReceiptData, receipt.ReceiptID)
+	}
+	if len(receipt.Lines) == 0 {
+		return nil, fmt.Errorf("%w: receipt %s must have at least one line", ErrInvalidReceiptData, receipt.ReceiptID)
+	}
+	if receipt.SourceType == "" {
+		receipt.SourceType = contracts.PurchaseReceiptSourceType
+	}
+	if receipt.SourceID == "" {
+		receipt.SourceID = receipt.ReceiptID
+	}
+	for _, line := range receipt.Lines {
+		if strings.TrimSpace(line.IngredientID) == "" {
+			return nil, fmt.Errorf("%w: receipt %s has a line with missing ingredient id", ErrInvalidReceiptData, receipt.ReceiptID)
+		}
+		if line.QuantityBaseUnits <= 0 {
+			return nil, fmt.Errorf("%w: receipt %s has a line with non-positive quantity", ErrInvalidReceiptData, receipt.ReceiptID)
+		}
+		if line.Unit == "" {
+			return nil, fmt.Errorf("%w: receipt %s has a line with missing unit", ErrInvalidReceiptData, receipt.ReceiptID)
+		}
+	}
+	return s.repo.RecordReceipt(ctx, receipt)
 }

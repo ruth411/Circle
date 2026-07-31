@@ -17,6 +17,10 @@ type sqlQueryer interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
+type sqlExecContext interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
 func NewSQLRepository(db *sql.DB) *SQLRepository {
 	return &SQLRepository{db: db}
 }
@@ -38,7 +42,7 @@ SELECT
     protein_grams_per_base_unit,
     carbs_grams_per_base_unit,
     fat_grams_per_base_unit,
-    current_cost_minor,
+    ROUND(current_cost_per_base_unit * 10000)::BIGINT AS current_cost_per_base_unit_scaled,
     currency,
     on_hand_base_units,
     par_level_base_units,
@@ -46,6 +50,8 @@ SELECT
     verification_status,
     serving_size_quantity,
     serving_size_unit,
+    ROUND(COALESCE(last_received_cost_per_base_unit, 0) * 10000)::BIGINT AS last_received_cost_per_base_unit_scaled,
+    last_received_at,
     created_at,
     updated_at
 FROM ingredient.ingredients
@@ -164,7 +170,7 @@ SET
     protein_grams_per_base_unit = $8,
     carbs_grams_per_base_unit = $9,
     fat_grams_per_base_unit = $10,
-    current_cost_minor = $11,
+    current_cost_per_base_unit = ($11::NUMERIC / 10000.0),
     currency = $12,
     on_hand_base_units = $13,
     par_level_base_units = $14,
@@ -187,7 +193,7 @@ WHERE id = $1
 			ingredient.MacrosPerBaseUnit.ProteinGrams,
 			ingredient.MacrosPerBaseUnit.CarbsGrams,
 			ingredient.MacrosPerBaseUnit.FatGrams,
-			ingredient.CurrentCostMinor,
+			int64(ingredient.CurrentCostPerBaseUnit),
 			ingredient.Currency,
 			ingredient.OnHandBaseUnits,
 			ingredient.ParLevelBaseUnits,
@@ -222,7 +228,7 @@ INSERT INTO ingredient.ingredients (
     protein_grams_per_base_unit,
     carbs_grams_per_base_unit,
     fat_grams_per_base_unit,
-    current_cost_minor,
+    current_cost_per_base_unit,
     currency,
     on_hand_base_units,
     par_level_base_units,
@@ -231,7 +237,7 @@ INSERT INTO ingredient.ingredients (
     serving_size_quantity,
     serving_size_unit
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18);
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, ($11::NUMERIC / 10000.0), $12, $13, $14, $15, $16, $17, $18);
 `
 	_, err := db.ExecContext(ctx, query,
 		ingredient.ID,
@@ -244,7 +250,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $
 		ingredient.MacrosPerBaseUnit.ProteinGrams,
 		ingredient.MacrosPerBaseUnit.CarbsGrams,
 		ingredient.MacrosPerBaseUnit.FatGrams,
-		ingredient.CurrentCostMinor,
+		int64(ingredient.CurrentCostPerBaseUnit),
 		ingredient.Currency,
 		ingredient.OnHandBaseUnits,
 		ingredient.ParLevelBaseUnits,
@@ -321,7 +327,7 @@ SELECT
     protein_grams_per_base_unit,
     carbs_grams_per_base_unit,
     fat_grams_per_base_unit,
-    current_cost_minor,
+    ROUND(current_cost_per_base_unit * 10000)::BIGINT AS current_cost_per_base_unit_scaled,
     currency,
     on_hand_base_units,
     par_level_base_units,
@@ -329,6 +335,8 @@ SELECT
     verification_status,
     serving_size_quantity,
     serving_size_unit,
+    ROUND(COALESCE(last_received_cost_per_base_unit, 0) * 10000)::BIGINT AS last_received_cost_per_base_unit_scaled,
+    last_received_at,
     created_at,
     updated_at
 FROM ingredient.ingredients
@@ -362,6 +370,7 @@ func scanIngredient(scanner ingredientScanner) (Ingredient, error) {
 	var baseUnit string
 	var provenance string
 	var verificationStatus string
+	var lastReceivedAt sql.NullTime
 
 	err := scanner.Scan(
 		&ingredient.ID,
@@ -374,7 +383,7 @@ func scanIngredient(scanner ingredientScanner) (Ingredient, error) {
 		&ingredient.MacrosPerBaseUnit.ProteinGrams,
 		&ingredient.MacrosPerBaseUnit.CarbsGrams,
 		&ingredient.MacrosPerBaseUnit.FatGrams,
-		&ingredient.CurrentCostMinor,
+		(*int64)(&ingredient.CurrentCostPerBaseUnit),
 		&ingredient.Currency,
 		&ingredient.OnHandBaseUnits,
 		&ingredient.ParLevelBaseUnits,
@@ -382,6 +391,8 @@ func scanIngredient(scanner ingredientScanner) (Ingredient, error) {
 		&verificationStatus,
 		&ingredient.ServingSizeQuantity,
 		&ingredient.ServingSizeUnit,
+		(*int64)(&ingredient.LastReceivedCostPerBaseUnit),
+		&lastReceivedAt,
 		&ingredient.CreatedAt,
 		&ingredient.UpdatedAt,
 	)
@@ -392,7 +403,24 @@ func scanIngredient(scanner ingredientScanner) (Ingredient, error) {
 	ingredient.BaseUnit = Unit(baseUnit)
 	ingredient.Provenance = Provenance(provenance)
 	ingredient.VerificationStatus = VerificationStatus(verificationStatus)
+	if lastReceivedAt.Valid {
+		value := lastReceivedAt.Time.UTC()
+		ingredient.LastReceivedAt = &value
+	}
 	return ingredient, nil
+}
+
+func ApplyReceivedCostSQL(ctx context.Context, db sqlExecContext, update CostUpdate) error {
+	_, err := db.ExecContext(ctx, `
+UPDATE ingredient.ingredients
+SET current_cost_per_base_unit = ($3::NUMERIC / 10000.0),
+    last_received_cost_per_base_unit = ($3::NUMERIC / 10000.0),
+    last_received_at = $4,
+    updated_at = NOW()
+WHERE location_id = $1
+  AND id = $2;
+`, update.LocationID, update.IngredientID, int64(update.CostPerBaseUnit), update.ReceivedAt.UTC())
+	return err
 }
 
 func loadUnits(ctx context.Context, db sqlQueryer, ingredient *Ingredient) error {

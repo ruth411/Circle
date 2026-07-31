@@ -22,22 +22,22 @@ type ingredientDependencies struct {
 }
 
 type ingredientRequest struct {
-	ID                  string                        `json:"id,omitempty"`
-	SourceItemID        string                        `json:"source_item_id,omitempty"`
-	Name                string                        `json:"name"`
-	Category            string                        `json:"category"`
-	BaseUnit            ingredient.Unit               `json:"base_unit"`
-	MacrosPerBaseUnit   macroPayload                  `json:"macros_per_base_unit"`
-	CurrentCostMinor    int64                         `json:"current_cost_minor"`
-	Currency            string                        `json:"currency"`
-	OnHandBaseUnits     float64                       `json:"on_hand_base_units"`
-	ParLevelBaseUnits   float64                       `json:"par_level_base_units"`
-	Provenance          ingredient.Provenance         `json:"provenance"`
-	VerificationStatus  ingredient.VerificationStatus `json:"verification_status"`
-	ServingSizeQuantity float64                       `json:"serving_size_quantity"`
-	ServingSizeUnit     string                        `json:"serving_size_unit"`
-	AlternateUnits      map[ingredient.Unit]float64   `json:"alternate_units,omitempty"`
-	YieldFactors        map[string]float64            `json:"yield_factors,omitempty"`
+	ID                     string                        `json:"id,omitempty"`
+	SourceItemID           string                        `json:"source_item_id,omitempty"`
+	Name                   string                        `json:"name"`
+	Category               string                        `json:"category"`
+	BaseUnit               ingredient.Unit               `json:"base_unit"`
+	MacrosPerBaseUnit      macroPayload                  `json:"macros_per_base_unit"`
+	CurrentCostPerBaseUnit float64                       `json:"current_cost_per_base_unit"`
+	Currency               string                        `json:"currency"`
+	OnHandBaseUnits        float64                       `json:"on_hand_base_units"`
+	ParLevelBaseUnits      float64                       `json:"par_level_base_units"`
+	Provenance             ingredient.Provenance         `json:"provenance"`
+	VerificationStatus     ingredient.VerificationStatus `json:"verification_status"`
+	ServingSizeQuantity    float64                       `json:"serving_size_quantity"`
+	ServingSizeUnit        string                        `json:"serving_size_unit"`
+	AlternateUnits         map[ingredient.Unit]float64   `json:"alternate_units,omitempty"`
+	YieldFactors           map[string]float64            `json:"yield_factors,omitempty"`
 }
 
 type macroPayload struct {
@@ -48,24 +48,24 @@ type macroPayload struct {
 }
 
 type ingredientResponse struct {
-	ID                  string                        `json:"id"`
-	LocationID          string                        `json:"location_id"`
-	SourceItemID        string                        `json:"source_item_id,omitempty"`
-	Name                string                        `json:"name"`
-	Category            string                        `json:"category"`
-	BaseUnit            ingredient.Unit               `json:"base_unit"`
-	MacrosPerBaseUnit   macroPayload                  `json:"macros_per_base_unit"`
-	CurrentCostMinor    int64                         `json:"current_cost_minor"`
-	Currency            string                        `json:"currency"`
-	OnHandBaseUnits     float64                       `json:"on_hand_base_units"`
-	ParLevelBaseUnits   float64                       `json:"par_level_base_units"`
-	Provenance          ingredient.Provenance         `json:"provenance"`
-	VerificationStatus  ingredient.VerificationStatus `json:"verification_status"`
-	LowConfidence       bool                          `json:"low_confidence"`
-	ServingSizeQuantity float64                       `json:"serving_size_quantity"`
-	ServingSizeUnit     string                        `json:"serving_size_unit"`
-	AlternateUnits      map[ingredient.Unit]float64   `json:"alternate_units,omitempty"`
-	YieldFactors        map[string]float64            `json:"yield_factors,omitempty"`
+	ID                     string                        `json:"id"`
+	LocationID             string                        `json:"location_id"`
+	SourceItemID           string                        `json:"source_item_id,omitempty"`
+	Name                   string                        `json:"name"`
+	Category               string                        `json:"category"`
+	BaseUnit               ingredient.Unit               `json:"base_unit"`
+	MacrosPerBaseUnit      macroPayload                  `json:"macros_per_base_unit"`
+	CurrentCostPerBaseUnit float64                       `json:"current_cost_per_base_unit"`
+	Currency               string                        `json:"currency"`
+	OnHandBaseUnits        float64                       `json:"on_hand_base_units"`
+	ParLevelBaseUnits      float64                       `json:"par_level_base_units"`
+	Provenance             ingredient.Provenance         `json:"provenance"`
+	VerificationStatus     ingredient.VerificationStatus `json:"verification_status"`
+	LowConfidence          bool                          `json:"low_confidence"`
+	ServingSizeQuantity    float64                       `json:"serving_size_quantity"`
+	ServingSizeUnit        string                        `json:"serving_size_unit"`
+	AlternateUnits         map[ingredient.Unit]float64   `json:"alternate_units,omitempty"`
+	YieldFactors           map[string]float64            `json:"yield_factors,omitempty"`
 }
 
 func registerIngredientRoutes(mux *http.ServeMux, deps ingredientDependencies) {
@@ -161,15 +161,15 @@ func (r ingredientRequest) toUpsertInput(locationID string, fallbackID string) i
 			CarbsGrams:   r.MacrosPerBaseUnit.CarbsGrams,
 			FatGrams:     r.MacrosPerBaseUnit.FatGrams,
 		},
-		CurrentCostMinor:    r.CurrentCostMinor,
-		Currency:            r.Currency,
-		OnHandBaseUnits:     r.OnHandBaseUnits,
-		ParLevelBaseUnits:   r.ParLevelBaseUnits,
-		Provenance:          r.Provenance,
-		VerificationStatus:  r.VerificationStatus,
-		ServingSizeQuantity: r.ServingSizeQuantity,
-		ServingSizeUnit:     r.ServingSizeUnit,
-		YieldFactors:        r.YieldFactors,
+		CurrentCostPerBaseUnit: r.CurrentCostPerBaseUnit,
+		Currency:               r.Currency,
+		OnHandBaseUnits:        r.OnHandBaseUnits,
+		ParLevelBaseUnits:      r.ParLevelBaseUnits,
+		Provenance:             r.Provenance,
+		VerificationStatus:     r.VerificationStatus,
+		ServingSizeQuantity:    r.ServingSizeQuantity,
+		ServingSizeUnit:        r.ServingSizeUnit,
+		YieldFactors:           r.YieldFactors,
 	}
 }
 
@@ -187,17 +187,17 @@ func toIngredientResponse(value ingredient.Ingredient) ingredientResponse {
 			CarbsGrams:   value.MacrosPerBaseUnit.CarbsGrams,
 			FatGrams:     value.MacrosPerBaseUnit.FatGrams,
 		},
-		CurrentCostMinor:    value.CurrentCostMinor,
-		Currency:            value.Currency,
-		OnHandBaseUnits:     value.OnHandBaseUnits,
-		ParLevelBaseUnits:   value.ParLevelBaseUnits,
-		Provenance:          value.Provenance,
-		VerificationStatus:  value.VerificationStatus,
-		LowConfidence:       value.VerificationStatus != ingredient.VerificationVerified,
-		ServingSizeQuantity: value.ServingSizeQuantity,
-		ServingSizeUnit:     value.ServingSizeUnit,
-		AlternateUnits:      value.AlternateUnits,
-		YieldFactors:        value.YieldFactors,
+		CurrentCostPerBaseUnit: value.CurrentCostPerBaseUnit.Float64(),
+		Currency:               value.Currency,
+		OnHandBaseUnits:        value.OnHandBaseUnits,
+		ParLevelBaseUnits:      value.ParLevelBaseUnits,
+		Provenance:             value.Provenance,
+		VerificationStatus:     value.VerificationStatus,
+		LowConfidence:          value.VerificationStatus != ingredient.VerificationVerified,
+		ServingSizeQuantity:    value.ServingSizeQuantity,
+		ServingSizeUnit:        value.ServingSizeUnit,
+		AlternateUnits:         value.AlternateUnits,
+		YieldFactors:           value.YieldFactors,
 	}
 }
 

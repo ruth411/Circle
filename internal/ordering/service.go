@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ruth411/circle/internal/contracts"
@@ -118,6 +119,8 @@ type Service struct {
 	repo      Repository
 	snapshots SnapshotLookup
 	payment   PaymentProvider
+	mu        sync.Mutex
+	inFlight  map[string]string
 }
 
 func NewService(payment PaymentProvider) *Service {
@@ -132,6 +135,7 @@ func NewServiceWithDependencies(repo Repository, snapshots SnapshotLookup, payme
 		repo:      repo,
 		snapshots: snapshots,
 		payment:   payment,
+		inFlight:  map[string]string{},
 	}
 }
 
@@ -309,6 +313,9 @@ func (s *Service) CloseCheck(ctx context.Context, input CloseCheckInput) (Order,
 		return Order{}, err
 	}
 	if current.Status == OrderStatusClosing {
+		if s.paymentInFlight(locationID, orderID, tender.ID) {
+			return Order{}, ErrOrderAlreadyClosing
+		}
 		return s.finalizeClosingOrder(ctx, locationID, orderID, tender)
 	}
 
@@ -319,6 +326,9 @@ func (s *Service) CloseCheck(ctx context.Context, input CloseCheckInput) (Order,
 	if order.Status == OrderStatusClosed {
 		return order, nil
 	}
+
+	s.setPaymentInFlight(locationID, orderID, tender.ID, true)
+	defer s.setPaymentInFlight(locationID, orderID, tender.ID, false)
 
 	if err := s.payment.Process(ctx, tender); err != nil {
 		paymentErr := fmt.Errorf("%w: %v", ErrPaymentFailed, err)
@@ -334,6 +344,25 @@ func (s *Service) CloseCheck(ctx context.Context, input CloseCheckInput) (Order,
 func backgroundCloseContext(ctx context.Context) context.Context {
 	closeCtx, _ := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	return closeCtx
+}
+
+func (s *Service) paymentInFlight(locationID string, orderID string, tenderID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.inFlight[locationID+"|"+orderID] == tenderID
+}
+
+func (s *Service) setPaymentInFlight(locationID string, orderID string, tenderID string, active bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	key := locationID + "|" + orderID
+	if active {
+		s.inFlight[key] = tenderID
+		return
+	}
+	delete(s.inFlight, key)
 }
 
 func (s *Service) finalizeClosingOrder(ctx context.Context, locationID string, orderID string, tender Tender) (Order, error) {
@@ -440,8 +469,15 @@ func selectModifiers(item recipe.SnapshotItem, selectedIDs []string) ([]recipe.S
 	seen := map[string]bool{}
 	for _, group := range item.ModifierGroups {
 		count := 0
+		groupSelected := map[string]bool{}
+		for _, defaultID := range group.DefaultModifierIDs {
+			groupSelected[defaultID] = true
+		}
 		for _, modifier := range group.Modifiers {
-			if !selected[modifier.ModifierID] {
+			if selected[modifier.ModifierID] {
+				groupSelected[modifier.ModifierID] = true
+			}
+			if !groupSelected[modifier.ModifierID] {
 				continue
 			}
 			count++

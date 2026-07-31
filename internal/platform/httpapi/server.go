@@ -15,6 +15,7 @@ import (
 	"github.com/ruth411/circle/internal/core/ingredient"
 	"github.com/ruth411/circle/internal/diner"
 	"github.com/ruth411/circle/internal/ordering"
+	"github.com/ruth411/circle/internal/purchasing"
 	"github.com/ruth411/circle/internal/tenancy"
 )
 
@@ -40,6 +41,7 @@ type Dependencies struct {
 	IngredientService    *ingredient.Service
 	DinerService         *diner.Service
 	OrderingService      *ordering.Service
+	PurchasingService    *purchasing.Service
 	SessionValidator     SessionValidator
 	LocationResolver     tenancy.Resolver
 	OrganizationResolver tenancy.OrganizationResolver
@@ -57,6 +59,12 @@ func NewServerWithDependencies(logger *slog.Logger, deps Dependencies) http.Hand
 	})
 	registerOrderingRoutes(mux, orderingDependencies{
 		service:              deps.OrderingService,
+		locationResolver:     deps.LocationResolver,
+		organizationResolver: deps.OrganizationResolver,
+		sessionValidator:     deps.SessionValidator,
+	})
+	registerPurchasingRoutes(mux, purchasingDependencies{
+		service:              deps.PurchasingService,
 		locationResolver:     deps.LocationResolver,
 		organizationResolver: deps.OrganizationResolver,
 		sessionValidator:     deps.SessionValidator,
@@ -142,7 +150,7 @@ func withJSONNotFound(next http.Handler) http.Handler {
 			status: http.StatusOK,
 		}
 		next.ServeHTTP(recorder, r)
-		if recorder.status == http.StatusNotFound {
+		if recorder.status == http.StatusNotFound && servesMuxNotFound(recorder.body.Bytes(), recorder.header) {
 			WriteError(w, r, http.StatusNotFound, "not_found", "route not found")
 			return
 		}
@@ -184,6 +192,16 @@ func loggedPath(path string) string {
 	default:
 		return path
 	}
+}
+
+func servesMuxNotFound(body []byte, header http.Header) bool {
+	if len(body) == 0 {
+		return true
+	}
+	if contentType := header.Get("Content-Type"); contentType != "" && !strings.HasPrefix(contentType, "text/plain") {
+		return false
+	}
+	return string(body) == "404 page not found\n"
 }
 
 type bufferedResponseWriter struct {

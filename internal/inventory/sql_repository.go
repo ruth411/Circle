@@ -11,6 +11,7 @@ import (
 
 const (
 	movementTypeDepletion   = "depletion"
+	movementTypeReceipt     = "receipt"
 	movementSourceClosedOrd = "closed_order"
 )
 
@@ -56,8 +57,10 @@ func (r *SQLRepository) RecordDepletion(ctx context.Context, order contracts.Clo
 		}
 
 		movement := Movement{
-			ID:           fmt.Sprintf("%s-%d", order.OrderID, i+1),
+			ID:           movementID(movementSourceClosedOrd, order.OrderID, i+1),
 			LocationID:   order.LocationID,
+			SourceType:   movementSourceClosedOrd,
+			SourceID:     order.OrderID,
 			OrderID:      order.OrderID,
 			IngredientID: ingredientID,
 			Quantity:     -usage[ingredientID],
@@ -79,7 +82,7 @@ INSERT INTO inventory.inventory_movements (
 )
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT (location_id, source_type, source_id, ingredient_id) DO NOTHING;
-`, movement.ID, movement.LocationID, movement.IngredientID, movementTypeDepletion, movementSourceClosedOrd, movement.OrderID, movement.Quantity, string(movement.Unit), movement.OccurredAt)
+`, movement.ID, movement.LocationID, movement.IngredientID, movementTypeDepletion, movement.SourceType, movement.SourceID, movement.Quantity, string(movement.Unit), movement.OccurredAt)
 		if err != nil {
 			return nil, err
 		}
@@ -98,11 +101,84 @@ ON CONFLICT (location_id, source_type, source_id, ingredient_id) DO NOTHING;
 	return movements, nil
 }
 
+func (r *SQLRepository) RecordReceipt(ctx context.Context, receipt contracts.PurchaseReceipt) ([]Movement, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	movements, err := RecordReceiptSQL(ctx, tx, receipt)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return movements, nil
+}
+
+func RecordReceiptSQL(ctx context.Context, db sqlQueryer, receipt contracts.PurchaseReceipt) ([]Movement, error) {
+	usage, units, err := aggregateReceiptLines(receipt)
+	if err != nil {
+		return nil, err
+	}
+	ingredientIDs := sortedIngredientIDs(usage)
+
+	var movements []Movement
+	for i, ingredientID := range ingredientIDs {
+		unit, ok := units[ingredientID]
+		if !ok {
+			return nil, fmt.Errorf("%w: missing unit snapshot for ingredient %s", ErrInvalidReceiptData, ingredientID)
+		}
+		movement := Movement{
+			ID:           movementID(receipt.SourceType, receipt.SourceID, i+1),
+			LocationID:   receipt.LocationID,
+			SourceType:   receipt.SourceType,
+			SourceID:     receipt.SourceID,
+			IngredientID: ingredientID,
+			Quantity:     usage[ingredientID],
+			Unit:         unit,
+			OccurredAt:   receipt.OccurredAt.UTC(),
+		}
+
+		result, err := db.ExecContext(ctx, `
+INSERT INTO inventory.inventory_movements (
+    id,
+    location_id,
+    ingredient_id,
+    movement_type,
+    source_type,
+    source_id,
+    quantity_base_units,
+    unit,
+    occurred_at
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+ON CONFLICT (location_id, source_type, source_id, ingredient_id) DO NOTHING;
+`, movement.ID, movement.LocationID, movement.IngredientID, movementTypeReceipt, movement.SourceType, movement.SourceID, movement.Quantity, string(movement.Unit), movement.OccurredAt)
+		if err != nil {
+			return nil, err
+		}
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			return nil, err
+		}
+		if rowsAffected == 1 {
+			movements = append(movements, movement)
+		}
+	}
+	return movements, nil
+}
+
 func (r *SQLRepository) ListMovements(ctx context.Context, locationID string) ([]Movement, error) {
 	rows, err := r.db.QueryContext(ctx, `
 SELECT
     id,
     location_id,
+    source_type,
     source_id,
     ingredient_id,
     quantity_base_units,
@@ -121,8 +197,11 @@ ORDER BY occurred_at, created_at, id;
 	for rows.Next() {
 		var movement Movement
 		var unit string
-		if err := rows.Scan(&movement.ID, &movement.LocationID, &movement.OrderID, &movement.IngredientID, &movement.Quantity, &unit, &movement.OccurredAt); err != nil {
+		if err := rows.Scan(&movement.ID, &movement.LocationID, &movement.SourceType, &movement.SourceID, &movement.IngredientID, &movement.Quantity, &unit, &movement.OccurredAt); err != nil {
 			return nil, err
+		}
+		if movement.SourceType == movementSourceClosedOrd {
+			movement.OrderID = movement.SourceID
 		}
 		movement.Unit = ingredient.Unit(unit)
 		movements = append(movements, movement)
