@@ -71,6 +71,7 @@ func main() {
 	ingredientService := ingredient.NewService(ingredientRepository)
 	recipeRepository := recipe.NewSQLRepository(database)
 	recipeService := recipe.NewService(recipeRepository, ingredientRepository)
+	catalogService := recipe.NewCatalogService(recipeRepository, recipeRepository, ingredientRepository, nil)
 	outbox := events.NewSQLOutbox(database)
 	orderingService := ordering.NewServiceWithDependencies(ordering.NewSQLRepository(database), recipeRepository, ordering.MockProvider{})
 	inventoryService := inventory.NewService(inventory.NewSQLRepository(database))
@@ -88,6 +89,7 @@ func main() {
 		Handler: httpapi.NewServerWithDependencies(logger, httpapi.Dependencies{
 			IngredientService:    ingredientService,
 			RecipeService:        recipeService,
+			CatalogService:       catalogService,
 			DinerService:         dinerService,
 			OrderingService:      orderingService,
 			PurchasingService:    purchasingService,

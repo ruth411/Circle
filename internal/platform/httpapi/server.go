@@ -41,6 +41,7 @@ func NewServer(logger *slog.Logger) http.Handler {
 type Dependencies struct {
 	IngredientService    *ingredient.Service
 	RecipeService        *recipe.Service
+	CatalogService       *recipe.CatalogService
 	DinerService         *diner.Service
 	OrderingService      *ordering.Service
 	PurchasingService    *purchasing.Service
@@ -61,6 +62,12 @@ func NewServerWithDependencies(logger *slog.Logger, deps Dependencies) http.Hand
 	})
 	registerRecipeRoutes(mux, recipeDependencies{
 		service:              deps.RecipeService,
+		locationResolver:     deps.LocationResolver,
+		organizationResolver: deps.OrganizationResolver,
+		sessionValidator:     deps.SessionValidator,
+	})
+	registerCatalogRoutes(mux, catalogDependencies{
+		service:              deps.CatalogService,
 		locationResolver:     deps.LocationResolver,
 		organizationResolver: deps.OrganizationResolver,
 		sessionValidator:     deps.SessionValidator,
