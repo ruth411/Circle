@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ruth411/circle/internal/core/ingredient"
+	"github.com/ruth411/circle/internal/core/recipe"
 	"github.com/ruth411/circle/internal/diner"
 	"github.com/ruth411/circle/internal/ordering"
 	"github.com/ruth411/circle/internal/purchasing"
@@ -39,6 +40,7 @@ func NewServer(logger *slog.Logger) http.Handler {
 
 type Dependencies struct {
 	IngredientService    *ingredient.Service
+	RecipeService        *recipe.Service
 	DinerService         *diner.Service
 	OrderingService      *ordering.Service
 	PurchasingService    *purchasing.Service
@@ -53,6 +55,12 @@ func NewServerWithDependencies(logger *slog.Logger, deps Dependencies) http.Hand
 	mux.HandleFunc("/readyz", healthz)
 	registerIngredientRoutes(mux, ingredientDependencies{
 		service:              deps.IngredientService,
+		locationResolver:     deps.LocationResolver,
+		organizationResolver: deps.OrganizationResolver,
+		sessionValidator:     deps.SessionValidator,
+	})
+	registerRecipeRoutes(mux, recipeDependencies{
+		service:              deps.RecipeService,
 		locationResolver:     deps.LocationResolver,
 		organizationResolver: deps.OrganizationResolver,
 		sessionValidator:     deps.SessionValidator,
