@@ -14,11 +14,15 @@ import (
 
 	"github.com/ruth411/circle/internal/core/ingredient"
 	"github.com/ruth411/circle/internal/identity"
+	"github.com/ruth411/circle/internal/inventory"
 	"github.com/ruth411/circle/internal/tenancy"
 )
 
 func TestIngredientListRouteReturnsTenantScopedResults(t *testing.T) {
 	service := ingredient.NewService(fakeIngredientRepository{
+		getFn: func(locationID string, ingredientID string) (ingredient.Ingredient, error) {
+			return ingredient.Ingredient{}, ingredient.ErrNotFound
+		},
 		listFn: func(locationID string, search string) ([]ingredient.Ingredient, error) {
 			if locationID != "loc-1" {
 				t.Fatalf("locationID = %q, want loc-1", locationID)
@@ -78,6 +82,9 @@ func TestIngredientListRouteReturnsTenantScopedResults(t *testing.T) {
 
 func TestIngredientCreateRouteCreatesIngredient(t *testing.T) {
 	service := ingredient.NewService(fakeIngredientRepository{
+		getFn: func(locationID string, ingredientID string) (ingredient.Ingredient, error) {
+			return ingredient.Ingredient{}, ingredient.ErrNotFound
+		},
 		createFn: func(value ingredient.Ingredient) (ingredient.Ingredient, error) {
 			return value, nil
 		},
@@ -131,6 +138,9 @@ func TestIngredientCreateRouteCreatesIngredient(t *testing.T) {
 
 func TestIngredientCreateRouteRoundsCostToFourDecimals(t *testing.T) {
 	service := ingredient.NewService(fakeIngredientRepository{
+		getFn: func(locationID string, ingredientID string) (ingredient.Ingredient, error) {
+			return ingredient.Ingredient{}, ingredient.ErrNotFound
+		},
 		createFn: func(value ingredient.Ingredient) (ingredient.Ingredient, error) {
 			return value, nil
 		},
@@ -182,6 +192,9 @@ func TestIngredientCreateRouteRoundsCostToFourDecimals(t *testing.T) {
 
 func TestIngredientUpdateRouteReturnsNotFound(t *testing.T) {
 	service := ingredient.NewService(fakeIngredientRepository{
+		getFn: func(locationID string, ingredientID string) (ingredient.Ingredient, error) {
+			return ingredient.Ingredient{}, ingredient.ErrNotFound
+		},
 		updateFn: func(value ingredient.Ingredient) (ingredient.Ingredient, error) {
 			return ingredient.Ingredient{}, ingredient.ErrNotFound
 		},
@@ -220,6 +233,9 @@ func TestIngredientUpdateRouteReturnsNotFound(t *testing.T) {
 
 func TestIngredientCreateRouteRejectsOversizedBody(t *testing.T) {
 	service := ingredient.NewService(fakeIngredientRepository{
+		getFn: func(locationID string, ingredientID string) (ingredient.Ingredient, error) {
+			return ingredient.Ingredient{}, ingredient.ErrNotFound
+		},
 		createFn: func(value ingredient.Ingredient) (ingredient.Ingredient, error) {
 			return value, nil
 		},
@@ -245,10 +261,113 @@ func TestIngredientCreateRouteRejectsOversizedBody(t *testing.T) {
 	}
 }
 
+func TestIngredientResolvedRouteReturnsCombinedIngredientView(t *testing.T) {
+	service := ingredient.NewService(fakeIngredientRepository{
+		getFn: func(locationID string, ingredientID string) (ingredient.Ingredient, error) {
+			if locationID != "loc-1" {
+				t.Fatalf("locationID = %q, want loc-1", locationID)
+			}
+			if ingredientID != "ing-1" {
+				t.Fatalf("ingredientID = %q, want ing-1", ingredientID)
+			}
+			receivedAt := time.Date(2026, 8, 2, 14, 0, 0, 0, time.UTC)
+			return ingredient.Ingredient{
+				ID:                          "ing-1",
+				LocationID:                  "loc-1",
+				Name:                        "Chicken",
+				Category:                    "protein",
+				BaseUnit:                    ingredient.UnitGram,
+				MacrosPerBaseUnit:           ingredient.MacroValues{Calories: 1.8, ProteinGrams: 0.32, FatGrams: 0.07},
+				CurrentCostPerBaseUnit:      ingredient.MustCostPerBaseUnit(0.1234),
+				LastReceivedCostPerBaseUnit: ingredient.MustCostPerBaseUnit(0.1111),
+				LastReceivedAt:              &receivedAt,
+				Currency:                    "USD",
+				Provenance:                  ingredient.ProvenanceRestaurantOfficial,
+				VerificationStatus:          ingredient.VerificationVerified,
+				ServingSizeQuantity:         100,
+				ServingSizeUnit:             "g",
+			}, nil
+		},
+		listFn: func(locationID string, search string) ([]ingredient.Ingredient, error) {
+			t.Fatal("List should not be called")
+			return nil, nil
+		},
+	})
+	inventoryService := inventory.NewService(fakeInventoryRepository{
+		onHandFn: func(_ context.Context, locationID string) ([]inventory.OnHandItem, error) {
+			if locationID != "loc-1" {
+				t.Fatalf("locationID = %q, want loc-1", locationID)
+			}
+			return []inventory.OnHandItem{{
+				LocationID:     "loc-1",
+				IngredientID:   "ing-1",
+				IngredientName: "Chicken",
+				BaseUnit:       ingredient.UnitGram,
+				OnHandQuantity: 2400,
+			}}, nil
+		},
+	})
+
+	server := NewServerWithDependencies(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		IngredientService:    service,
+		InventoryService:     inventoryService,
+		SessionValidator:     seedSessionService(t, "loc-1"),
+		OrganizationResolver: tenancy.StaticOrganizationResolver{"loc-1": "org-1"},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/ingredients/ing-1/resolved", nil)
+	req.Header.Set("X-Location-Id", "loc-1")
+	req.Header.Set(sessionIDHeader, "session-1")
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body = %s", recorder.Code, recorder.Body.String())
+	}
+
+	var payload struct {
+		Ingredient struct {
+			ID                          string       `json:"id"`
+			OnHandBaseUnits             float64      `json:"on_hand_base_units"`
+			CurrentCostPerBaseUnit      float64      `json:"current_cost_per_base_unit"`
+			LastReceivedCostPerBaseUnit float64      `json:"last_received_cost_per_base_unit"`
+			LastReceivedAt              *time.Time   `json:"last_received_at"`
+			MacrosPerBaseUnit           macroPayload `json:"macros_per_base_unit"`
+		} `json:"ingredient"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+	if payload.Ingredient.ID != "ing-1" {
+		t.Fatalf("id = %q, want ing-1", payload.Ingredient.ID)
+	}
+	if payload.Ingredient.OnHandBaseUnits != 2400 {
+		t.Fatalf("on hand = %v, want 2400", payload.Ingredient.OnHandBaseUnits)
+	}
+	if payload.Ingredient.CurrentCostPerBaseUnit != 0.1234 {
+		t.Fatalf("current cost = %v, want 0.1234", payload.Ingredient.CurrentCostPerBaseUnit)
+	}
+	if payload.Ingredient.LastReceivedCostPerBaseUnit != 0.1111 {
+		t.Fatalf("last received cost = %v, want 0.1111", payload.Ingredient.LastReceivedCostPerBaseUnit)
+	}
+	if payload.Ingredient.LastReceivedAt == nil {
+		t.Fatal("last received at = nil, want timestamp")
+	}
+	if payload.Ingredient.MacrosPerBaseUnit.ProteinGrams != 0.32 {
+		t.Fatalf("protein = %v, want 0.32", payload.Ingredient.MacrosPerBaseUnit.ProteinGrams)
+	}
+}
+
 type fakeIngredientRepository struct {
+	getFn    func(string, string) (ingredient.Ingredient, error)
 	listFn   func(string, string) ([]ingredient.Ingredient, error)
 	createFn func(ingredient.Ingredient) (ingredient.Ingredient, error)
 	updateFn func(ingredient.Ingredient) (ingredient.Ingredient, error)
+}
+
+func (f fakeIngredientRepository) Get(_ context.Context, locationID string, ingredientID string) (ingredient.Ingredient, error) {
+	return f.getFn(locationID, ingredientID)
 }
 
 func (f fakeIngredientRepository) List(_ context.Context, locationID string, search string) ([]ingredient.Ingredient, error) {

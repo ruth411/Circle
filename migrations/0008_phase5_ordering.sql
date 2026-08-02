@@ -187,8 +187,6 @@ FROM (
     fat_grams,
     ingredient_usage_json
 )
-JOIN recipe.menu_snapshots AS snapshots
-    ON snapshots.id = seed.snapshot_id
 ON CONFLICT (snapshot_id, menu_item_id) DO NOTHING;
 
 INSERT INTO recipe.menu_snapshot_modifier_groups (
@@ -233,9 +231,6 @@ FROM (
     exclusive,
     default_modifier_ids
 )
-JOIN recipe.menu_snapshot_items AS items
-    ON items.snapshot_id = seed.snapshot_id
-   AND items.menu_item_id = seed.menu_item_id
 ON CONFLICT (snapshot_id, group_id) DO NOTHING;
 
 INSERT INTO recipe.menu_snapshot_modifiers (
@@ -300,7 +295,4 @@ FROM (
     fat_grams,
     ingredient_usage_json
 )
-JOIN recipe.menu_snapshot_modifier_groups AS groups
-    ON groups.snapshot_id = seed.snapshot_id
-   AND groups.group_id = seed.group_id
 ON CONFLICT (snapshot_id, modifier_id) DO NOTHING;

@@ -292,6 +292,17 @@ type phaseA4IngredientRepository struct {
 	state *phaseA4State
 }
 
+func (r phaseA4IngredientRepository) Get(_ context.Context, locationID string, ingredientID string) (ingredient.Ingredient, error) {
+	r.state.mu.Lock()
+	defer r.state.mu.Unlock()
+
+	value, ok := r.state.ingredients[phaseA4Key(locationID, ingredientID)]
+	if !ok {
+		return ingredient.Ingredient{}, ingredient.ErrNotFound
+	}
+	return value, nil
+}
+
 func (r phaseA4IngredientRepository) List(_ context.Context, locationID string, search string) ([]ingredient.Ingredient, error) {
 	r.state.mu.Lock()
 	defer r.state.mu.Unlock()
@@ -736,6 +747,98 @@ func (r *phaseA4InventoryRepository) ListMovements(_ context.Context, locationID
 		if movement.LocationID == locationID {
 			out = append(out, movement)
 		}
+	}
+	return out, nil
+}
+
+func (r *phaseA4InventoryRepository) OnHand(_ context.Context, locationID string) ([]inventory.OnHandItem, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	summary := map[string]inventory.OnHandItem{}
+	for _, movement := range r.movements {
+		if movement.LocationID != locationID {
+			continue
+		}
+		item := summary[movement.IngredientID]
+		item.LocationID = movement.LocationID
+		item.IngredientID = movement.IngredientID
+		item.IngredientName = movement.IngredientID
+		item.BaseUnit = movement.Unit
+		item.OnHandQuantity += movement.Quantity
+		summary[movement.IngredientID] = item
+	}
+
+	ingredientIDs := make([]string, 0, len(summary))
+	for ingredientID := range summary {
+		ingredientIDs = append(ingredientIDs, ingredientID)
+	}
+	slices.Sort(ingredientIDs)
+
+	out := make([]inventory.OnHandItem, 0, len(ingredientIDs))
+	for _, ingredientID := range ingredientIDs {
+		out = append(out, summary[ingredientID])
+	}
+	return out, nil
+}
+
+func (r *phaseA4InventoryRepository) ListOrganizationMovements(ctx context.Context, _ string, locationID string) ([]inventory.Movement, error) {
+	if locationID != "" {
+		return r.ListMovements(ctx, locationID)
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]inventory.Movement(nil), r.movements...), nil
+}
+
+func (r *phaseA4InventoryRepository) OrganizationOnHand(ctx context.Context, _ string, locationID string) ([]inventory.OnHandItem, error) {
+	if locationID != "" {
+		return r.OnHand(ctx, locationID)
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	type key struct {
+		locationID   string
+		ingredientID string
+	}
+	summary := map[key]inventory.OnHandItem{}
+	for _, movement := range r.movements {
+		k := key{locationID: movement.LocationID, ingredientID: movement.IngredientID}
+		item := summary[k]
+		item.LocationID = movement.LocationID
+		item.IngredientID = movement.IngredientID
+		item.IngredientName = movement.IngredientID
+		item.BaseUnit = movement.Unit
+		item.OnHandQuantity += movement.Quantity
+		summary[k] = item
+	}
+
+	keys := make([]key, 0, len(summary))
+	for k := range summary {
+		keys = append(keys, k)
+	}
+	slices.SortFunc(keys, func(a key, b key) int {
+		if a.locationID != b.locationID {
+			if a.locationID < b.locationID {
+				return -1
+			}
+			return 1
+		}
+		if a.ingredientID < b.ingredientID {
+			return -1
+		}
+		if a.ingredientID > b.ingredientID {
+			return 1
+		}
+		return 0
+	})
+
+	out := make([]inventory.OnHandItem, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, summary[k])
 	}
 	return out, nil
 }

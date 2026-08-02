@@ -119,6 +119,8 @@ type snapshotItemResponse struct {
 	Description     string                          `json:"description,omitempty"`
 	PriceMinor      int64                           `json:"price_minor"`
 	Currency        string                          `json:"currency"`
+	CostMinor       int64                           `json:"cost_minor"`
+	LowConfidence   bool                            `json:"low_confidence"`
 	Macros          macroPayload                    `json:"macros"`
 	IngredientUsage map[string]float64              `json:"ingredient_usage,omitempty"`
 	IngredientUnits map[string]ingredient.Unit      `json:"ingredient_units,omitempty"`
@@ -141,6 +143,8 @@ type snapshotModifierResponse struct {
 	Name            string                     `json:"name"`
 	PriceDeltaMinor int64                      `json:"price_delta_minor"`
 	Currency        string                     `json:"currency"`
+	CostMinor       int64                      `json:"cost_minor"`
+	LowConfidence   bool                       `json:"low_confidence"`
 	MacroDelta      macroPayload               `json:"macro_delta"`
 	IngredientUsage map[string]float64         `json:"ingredient_usage,omitempty"`
 	IngredientUnits map[string]ingredient.Unit `json:"ingredient_units,omitempty"`
@@ -418,6 +422,8 @@ func toMenuSnapshotResponse(snapshot recipe.MenuSnapshot) menuSnapshotResponse {
 					Name:            modifier.Name,
 					PriceDeltaMinor: modifier.PriceDeltaMinor,
 					Currency:        modifier.Currency,
+					CostMinor:       modifier.CostMinor,
+					LowConfidence:   modifier.LowConfidence,
 					MacroDelta: macroPayload{
 						Calories:     modifier.MacroDelta.Calories,
 						ProteinGrams: modifier.MacroDelta.ProteinGrams,
@@ -447,6 +453,8 @@ func toMenuSnapshotResponse(snapshot recipe.MenuSnapshot) menuSnapshotResponse {
 			Description:     item.Description,
 			PriceMinor:      item.PriceMinor,
 			Currency:        item.Currency,
+			CostMinor:       item.CostMinor,
+			LowConfidence:   item.LowConfidence,
 			Macros:          macroPayload{Calories: item.Macros.Calories, ProteinGrams: item.Macros.ProteinGrams, CarbsGrams: item.Macros.CarbsGrams, FatGrams: item.Macros.FatGrams},
 			IngredientUsage: item.IngredientUsage,
 			IngredientUnits: item.IngredientUnits,

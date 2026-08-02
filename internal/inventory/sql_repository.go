@@ -186,7 +186,7 @@ SELECT
     occurred_at
 FROM inventory.inventory_movements
 WHERE location_id = $1
-ORDER BY occurred_at, created_at, id;
+ORDER BY occurred_at DESC, created_at DESC, id DESC;
 `, locationID)
 	if err != nil {
 		return nil, err
@@ -207,4 +207,118 @@ ORDER BY occurred_at, created_at, id;
 		movements = append(movements, movement)
 	}
 	return movements, rows.Err()
+}
+
+func (r *SQLRepository) OnHand(ctx context.Context, locationID string) ([]OnHandItem, error) {
+	rows, err := r.db.QueryContext(ctx, `
+SELECT
+    ingredients.location_id,
+    ingredients.id,
+    ingredients.name,
+    ingredients.base_unit,
+    COALESCE(SUM(movements.quantity_base_units), 0)
+FROM ingredient.ingredients AS ingredients
+LEFT JOIN inventory.inventory_movements AS movements
+  ON movements.location_id = ingredients.location_id
+ AND movements.ingredient_id = ingredients.id
+WHERE ingredients.location_id = $1
+GROUP BY ingredients.location_id, ingredients.id, ingredients.name, ingredients.base_unit
+ORDER BY ingredients.name, ingredients.id;
+`, locationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []OnHandItem
+	for rows.Next() {
+		var item OnHandItem
+		var unit string
+		if err := rows.Scan(&item.LocationID, &item.IngredientID, &item.IngredientName, &unit, &item.OnHandQuantity); err != nil {
+			return nil, err
+		}
+		item.BaseUnit = ingredient.Unit(unit)
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (r *SQLRepository) ListOrganizationMovements(ctx context.Context, organizationID string, locationID string) ([]Movement, error) {
+	rows, err := r.db.QueryContext(ctx, `
+SELECT
+    movements.id,
+    movements.location_id,
+    movements.source_type,
+    movements.source_id,
+    movements.ingredient_id,
+    movements.quantity_base_units,
+    movements.unit,
+    movements.occurred_at
+FROM inventory.inventory_movements AS movements
+JOIN tenancy.locations AS locations
+  ON locations.id = movements.location_id
+JOIN tenancy.restaurants AS restaurants
+  ON restaurants.id = locations.restaurant_id
+WHERE restaurants.organization_id = $1
+  AND ($2 = '' OR movements.location_id = $2)
+ORDER BY movements.occurred_at DESC, movements.created_at DESC, movements.id DESC;
+`, organizationID, locationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var movements []Movement
+	for rows.Next() {
+		var movement Movement
+		var unit string
+		if err := rows.Scan(&movement.ID, &movement.LocationID, &movement.SourceType, &movement.SourceID, &movement.IngredientID, &movement.Quantity, &unit, &movement.OccurredAt); err != nil {
+			return nil, err
+		}
+		if movement.SourceType == movementSourceClosedOrd {
+			movement.OrderID = movement.SourceID
+		}
+		movement.Unit = ingredient.Unit(unit)
+		movements = append(movements, movement)
+	}
+	return movements, rows.Err()
+}
+
+func (r *SQLRepository) OrganizationOnHand(ctx context.Context, organizationID string, locationID string) ([]OnHandItem, error) {
+	rows, err := r.db.QueryContext(ctx, `
+SELECT
+    ingredients.location_id,
+    ingredients.id,
+    ingredients.name,
+    ingredients.base_unit,
+    COALESCE(SUM(movements.quantity_base_units), 0)
+FROM ingredient.ingredients AS ingredients
+JOIN tenancy.locations AS locations
+  ON locations.id = ingredients.location_id
+JOIN tenancy.restaurants AS restaurants
+  ON restaurants.id = locations.restaurant_id
+LEFT JOIN inventory.inventory_movements AS movements
+  ON movements.location_id = ingredients.location_id
+ AND movements.ingredient_id = ingredients.id
+WHERE restaurants.organization_id = $1
+  AND ($2 = '' OR ingredients.location_id = $2)
+GROUP BY ingredients.location_id, ingredients.id, ingredients.name, ingredients.base_unit
+ORDER BY ingredients.location_id, ingredients.name, ingredients.id;
+`, organizationID, locationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []OnHandItem
+	for rows.Next() {
+		var item OnHandItem
+		var unit string
+		if err := rows.Scan(&item.LocationID, &item.IngredientID, &item.IngredientName, &unit, &item.OnHandQuantity); err != nil {
+			return nil, err
+		}
+		item.BaseUnit = ingredient.Unit(unit)
+		items = append(items, item)
+	}
+	return items, rows.Err()
 }

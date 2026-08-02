@@ -26,6 +26,7 @@ type fakeRepository struct {
 	updatePOLineFn     func(context.Context, string, string, PurchaseOrderLine) (PurchaseOrderLine, error)
 	removePOLineFn     func(context.Context, string, string, string) error
 	submitPOFn         func(context.Context, string, string) (PurchaseOrder, error)
+	cancelPOFn         func(context.Context, string, string) (PurchaseOrder, error)
 	receiveFn          func(context.Context, PlannedReceipt) (Receipt, error)
 	listReceiptsFn     func(context.Context, string) ([]Receipt, error)
 	getReceiptFn       func(context.Context, string, string) (Receipt, error)
@@ -89,6 +90,10 @@ func (f fakeRepository) RemovePurchaseOrderLine(ctx context.Context, locationID 
 
 func (f fakeRepository) SubmitPurchaseOrder(ctx context.Context, locationID string, poID string) (PurchaseOrder, error) {
 	return f.submitPOFn(ctx, locationID, poID)
+}
+
+func (f fakeRepository) CancelPurchaseOrder(ctx context.Context, locationID string, poID string) (PurchaseOrder, error) {
+	return f.cancelPOFn(ctx, locationID, poID)
 }
 
 func (f fakeRepository) Receive(ctx context.Context, planned PlannedReceipt) (Receipt, error) {
@@ -190,6 +195,73 @@ func TestSubmitPurchaseOrderRequiresAtLeastOneLine(t *testing.T) {
 	_, err := service.SubmitPurchaseOrder(context.Background(), "loc-1", "po-1")
 	if !errors.Is(err, ErrInvalidPurchase) {
 		t.Fatalf("err = %v, want ErrInvalidPurchase", err)
+	}
+}
+
+func TestCancelPurchaseOrderAllowsDraftAndSubmitted(t *testing.T) {
+	statuses := []PurchaseOrderStatus{
+		PurchaseOrderStatusDraft,
+		PurchaseOrderStatusSubmitted,
+	}
+
+	for _, status := range statuses {
+		t.Run(string(status), func(t *testing.T) {
+			service := NewService(fakeRepository{
+				getPOFn: func(_ context.Context, locationID string, poID string) (PurchaseOrder, error) {
+					return PurchaseOrder{
+						ID:         poID,
+						LocationID: locationID,
+						Status:     status,
+					}, nil
+				},
+				cancelPOFn: func(_ context.Context, locationID string, poID string) (PurchaseOrder, error) {
+					return PurchaseOrder{
+						ID:         poID,
+						LocationID: locationID,
+						Status:     PurchaseOrderStatusCancelled,
+					}, nil
+				},
+			}, fakeIngredientLookup{})
+
+			order, err := service.CancelPurchaseOrder(context.Background(), "loc-1", "po-1")
+			if err != nil {
+				t.Fatalf("CancelPurchaseOrder returned error: %v", err)
+			}
+			if order.Status != PurchaseOrderStatusCancelled {
+				t.Fatalf("status = %q, want cancelled", order.Status)
+			}
+		})
+	}
+}
+
+func TestCancelPurchaseOrderRejectsReceivedStates(t *testing.T) {
+	statuses := []PurchaseOrderStatus{
+		PurchaseOrderStatusPartiallyReceived,
+		PurchaseOrderStatusReceived,
+		PurchaseOrderStatusCancelled,
+	}
+
+	for _, status := range statuses {
+		t.Run(string(status), func(t *testing.T) {
+			service := NewService(fakeRepository{
+				getPOFn: func(_ context.Context, locationID string, poID string) (PurchaseOrder, error) {
+					return PurchaseOrder{
+						ID:         poID,
+						LocationID: locationID,
+						Status:     status,
+					}, nil
+				},
+				cancelPOFn: func(_ context.Context, _ string, _ string) (PurchaseOrder, error) {
+					t.Fatal("CancelPurchaseOrder should not be called")
+					return PurchaseOrder{}, nil
+				},
+			}, fakeIngredientLookup{})
+
+			_, err := service.CancelPurchaseOrder(context.Background(), "loc-1", "po-1")
+			if !errors.Is(err, ErrInvalidPurchase) {
+				t.Fatalf("err = %v, want ErrInvalidPurchase", err)
+			}
+		})
 	}
 }
 

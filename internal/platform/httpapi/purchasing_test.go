@@ -31,6 +31,7 @@ type fakePurchasingRepository struct {
 	updatePOLineFn     func(context.Context, string, string, purchasing.PurchaseOrderLine) (purchasing.PurchaseOrderLine, error)
 	removePOLineFn     func(context.Context, string, string, string) error
 	submitPOFn         func(context.Context, string, string) (purchasing.PurchaseOrder, error)
+	cancelPOFn         func(context.Context, string, string) (purchasing.PurchaseOrder, error)
 	receiveFn          func(context.Context, purchasing.PlannedReceipt) (purchasing.Receipt, error)
 	listReceiptsFn     func(context.Context, string) ([]purchasing.Receipt, error)
 	getReceiptFn       func(context.Context, string, string) (purchasing.Receipt, error)
@@ -80,6 +81,9 @@ func (f fakePurchasingRepository) RemovePurchaseOrderLine(ctx context.Context, l
 }
 func (f fakePurchasingRepository) SubmitPurchaseOrder(ctx context.Context, locationID string, poID string) (purchasing.PurchaseOrder, error) {
 	return f.submitPOFn(ctx, locationID, poID)
+}
+func (f fakePurchasingRepository) CancelPurchaseOrder(ctx context.Context, locationID string, poID string) (purchasing.PurchaseOrder, error) {
+	return f.cancelPOFn(ctx, locationID, poID)
 }
 func (f fakePurchasingRepository) Receive(ctx context.Context, planned purchasing.PlannedReceipt) (purchasing.Receipt, error) {
 	return f.receiveFn(ctx, planned)
@@ -211,5 +215,52 @@ func TestReceiptCreateRouteRoundsUnitCost(t *testing.T) {
 	}
 	if got, want := payload.Receipt.Lines[0].ReceivedUnitCost, 10.0; got != want {
 		t.Fatalf("received unit cost = %v, want %v", got, want)
+	}
+}
+
+func TestPurchaseOrderCancelRouteCancelsPurchaseOrder(t *testing.T) {
+	service := purchasing.NewService(fakePurchasingRepository{
+		getPOFn: func(_ context.Context, locationID string, poID string) (purchasing.PurchaseOrder, error) {
+			return purchasing.PurchaseOrder{
+				ID:         poID,
+				LocationID: locationID,
+				Status:     purchasing.PurchaseOrderStatusSubmitted,
+			}, nil
+		},
+		cancelPOFn: func(_ context.Context, locationID string, poID string) (purchasing.PurchaseOrder, error) {
+			return purchasing.PurchaseOrder{
+				ID:         poID,
+				LocationID: locationID,
+				Status:     purchasing.PurchaseOrderStatusCancelled,
+			}, nil
+		},
+	}, fakePurchasingIngredientLookup{})
+
+	identityService := seedSessionService(t, "loc-1")
+	server := NewServerWithDependencies(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		PurchasingService:    service,
+		SessionValidator:     identityService,
+		OrganizationResolver: tenancy.StaticOrganizationResolver{"loc-1": "org-1"},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/purchase-orders/po-1/cancel", nil)
+	req.Header.Set("X-Location-Id", "loc-1")
+	req.Header.Set(sessionIDHeader, "session-1")
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", recorder.Code)
+	}
+
+	var payload struct {
+		PurchaseOrder purchaseOrderResponse `json:"purchase_order"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+	if payload.PurchaseOrder.Status != purchasing.PurchaseOrderStatusCancelled {
+		t.Fatalf("status = %q, want cancelled", payload.PurchaseOrder.Status)
 	}
 }

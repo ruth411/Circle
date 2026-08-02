@@ -3,10 +3,12 @@ package purchasing
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 
+	"github.com/ruth411/circle/internal/contracts"
 	"github.com/ruth411/circle/internal/core/ingredient"
-	"github.com/ruth411/circle/internal/inventory"
+	"github.com/ruth411/circle/internal/platform/events"
 )
 
 type SQLRepository struct {
@@ -369,6 +371,27 @@ WHERE location_id = $1
 	return r.GetPurchaseOrder(ctx, locationID, poID)
 }
 
+func (r *SQLRepository) CancelPurchaseOrder(ctx context.Context, locationID string, poID string) (PurchaseOrder, error) {
+	result, err := r.db.ExecContext(ctx, `
+UPDATE purchasing.purchase_orders
+SET status = 'cancelled',
+    updated_at = NOW()
+WHERE location_id = $1
+  AND id = $2;
+`, locationID, poID)
+	if err != nil {
+		return PurchaseOrder{}, err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return PurchaseOrder{}, err
+	}
+	if rowsAffected == 0 {
+		return PurchaseOrder{}, ErrPurchaseOrderNotFound
+	}
+	return r.GetPurchaseOrder(ctx, locationID, poID)
+}
+
 func (r *SQLRepository) Receive(ctx context.Context, planned PlannedReceipt) (Receipt, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -447,9 +470,6 @@ WHERE location_id = $1
 		}
 	}
 
-	if _, err := inventory.RecordReceiptSQL(ctx, tx, planned.InventoryReceipt); err != nil {
-		return Receipt{}, err
-	}
 	for _, update := range planned.CostUpdates {
 		if err := ingredient.ApplyReceivedCostSQL(ctx, tx, ingredient.CostUpdate{
 			LocationID:      update.LocationID,
@@ -461,6 +481,20 @@ WHERE location_id = $1
 		}
 	}
 	if err := updatePurchaseOrderStatus(ctx, tx, planned.Receipt.LocationID, planned.Receipt.PurchaseOrderID); err != nil {
+		return Receipt{}, err
+	}
+	payload, err := json.Marshal(planned.InventoryReceipt)
+	if err != nil {
+		return Receipt{}, err
+	}
+	if err := events.AppendSQL(ctx, tx, events.Event{
+		ID:          "evt-purchase-receipt-" + planned.Receipt.LocationID + "-" + planned.Receipt.ID,
+		Name:        contracts.PurchaseReceiptEventName,
+		AggregateID: planned.Receipt.ID,
+		LocationID:  planned.Receipt.LocationID,
+		Payload:     payload,
+		OccurredAt:  planned.InventoryReceipt.OccurredAt.UTC(),
+	}); err != nil {
 		return Receipt{}, err
 	}
 

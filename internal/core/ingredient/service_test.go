@@ -7,9 +7,14 @@ import (
 )
 
 type fakeRepository struct {
+	getFn    func(context.Context, string, string) (Ingredient, error)
 	listFn   func(context.Context, string, string) ([]Ingredient, error)
 	createFn func(context.Context, Ingredient) (Ingredient, error)
 	updateFn func(context.Context, Ingredient) (Ingredient, error)
+}
+
+func (f fakeRepository) Get(ctx context.Context, locationID string, ingredientID string) (Ingredient, error) {
+	return f.getFn(ctx, locationID, ingredientID)
 }
 
 func (f fakeRepository) List(ctx context.Context, locationID string, search string) ([]Ingredient, error) {
@@ -207,5 +212,30 @@ func TestListTrimsSearch(t *testing.T) {
 	}
 	if gotSearch != "chicken" {
 		t.Fatalf("search = %q, want chicken", gotSearch)
+	}
+}
+
+func TestGetTrimsIdentifiers(t *testing.T) {
+	var gotLocationID string
+	var gotIngredientID string
+
+	service := NewService(fakeRepository{
+		getFn: func(_ context.Context, locationID string, ingredientID string) (Ingredient, error) {
+			gotLocationID = locationID
+			gotIngredientID = ingredientID
+			return Ingredient{ID: ingredientID, LocationID: locationID}, nil
+		},
+	})
+
+	_, err := service.Get(context.Background(), " loc-1 ", " ing-1 ")
+	if err != nil {
+		t.Fatalf("Get returned error: %v", err)
+	}
+
+	if gotLocationID != "loc-1" {
+		t.Fatalf("locationID = %q, want loc-1", gotLocationID)
+	}
+	if gotIngredientID != "ing-1" {
+		t.Fatalf("ingredientID = %q, want ing-1", gotIngredientID)
 	}
 }

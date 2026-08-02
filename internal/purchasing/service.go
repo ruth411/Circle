@@ -34,6 +34,7 @@ type Repository interface {
 	UpdatePurchaseOrderLine(context.Context, string, string, PurchaseOrderLine) (PurchaseOrderLine, error)
 	RemovePurchaseOrderLine(context.Context, string, string, string) error
 	SubmitPurchaseOrder(context.Context, string, string) (PurchaseOrder, error)
+	CancelPurchaseOrder(context.Context, string, string) (PurchaseOrder, error)
 	Receive(context.Context, PlannedReceipt) (Receipt, error)
 	ListReceipts(context.Context, string) ([]Receipt, error)
 	GetReceipt(context.Context, string, string) (Receipt, error)
@@ -319,6 +320,25 @@ func (s *Service) SubmitPurchaseOrder(ctx context.Context, locationID string, po
 		return PurchaseOrder{}, fmt.Errorf("%w: purchase order %s must have at least one line", ErrInvalidPurchase, po.ID)
 	}
 	return s.repo.SubmitPurchaseOrder(ctx, locationID, poID)
+}
+
+func (s *Service) CancelPurchaseOrder(ctx context.Context, locationID string, poID string) (PurchaseOrder, error) {
+	if s.repo == nil {
+		return PurchaseOrder{}, fmt.Errorf("purchasing repository is required")
+	}
+	locationID = strings.TrimSpace(locationID)
+	poID = strings.TrimSpace(poID)
+	if locationID == "" || poID == "" {
+		return PurchaseOrder{}, fmt.Errorf("%w: location id and purchase order id are required", ErrInvalidPurchase)
+	}
+	po, err := s.repo.GetPurchaseOrder(ctx, locationID, poID)
+	if err != nil {
+		return PurchaseOrder{}, err
+	}
+	if po.Status != PurchaseOrderStatusDraft && po.Status != PurchaseOrderStatusSubmitted {
+		return PurchaseOrder{}, fmt.Errorf("%w: purchase order %s cannot be cancelled from status %s", ErrInvalidPurchase, po.ID, po.Status)
+	}
+	return s.repo.CancelPurchaseOrder(ctx, locationID, poID)
 }
 
 func (s *Service) Receive(ctx context.Context, input ReceiptInput) (Receipt, error) {

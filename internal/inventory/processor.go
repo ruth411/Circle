@@ -33,6 +33,18 @@ func (p *Processor) ProcessPendingClosedOrders(ctx context.Context, limit int) (
 		return 0, fmt.Errorf("inventory service is required")
 	}
 
+	processed, err := p.processClosedOrders(ctx, limit)
+	if err != nil {
+		return processed, err
+	}
+	receiptProcessed, err := p.processReceipts(ctx, limit)
+	if err != nil {
+		return processed + receiptProcessed, err
+	}
+	return processed + receiptProcessed, nil
+}
+
+func (p *Processor) processClosedOrders(ctx context.Context, limit int) (int, error) {
 	pending, err := p.outbox.ListUnpublished(ctx, outboxConsumer, contracts.ClosedOrderEventName, limit)
 	if err != nil {
 		return 0, err
@@ -53,6 +65,41 @@ func (p *Processor) ProcessPendingClosedOrders(ctx context.Context, limit int) (
 		if _, err := p.service.RecordDepletion(ctx, order); err != nil {
 			if errors.Is(err, ErrInvalidClosedOrderData) {
 				if err := markInvalidEventDelivered(ctx, p.outbox, event.ID, "invalid_closed_order", err); err != nil {
+					return processed, err
+				}
+				continue
+			}
+			return processed, err
+		}
+		if err := p.outbox.MarkPublished(ctx, outboxConsumer, event.ID, time.Now().UTC()); err != nil && !errors.Is(err, context.Canceled) {
+			return processed, err
+		}
+		processed++
+	}
+	return processed, nil
+}
+
+func (p *Processor) processReceipts(ctx context.Context, limit int) (int, error) {
+	pending, err := p.outbox.ListUnpublished(ctx, outboxConsumer, contracts.PurchaseReceiptEventName, limit)
+	if err != nil {
+		return 0, err
+	}
+
+	processed := 0
+	for _, event := range pending {
+		var receipt contracts.PurchaseReceipt
+		if err := json.Unmarshal(event.Payload, &receipt); err != nil {
+			if err := markInvalidEventDelivered(ctx, p.outbox, event.ID, "invalid_json", err); err != nil {
+				return processed, err
+			}
+			continue
+		}
+		if receipt.LocationID == "" {
+			receipt.LocationID = event.LocationID
+		}
+		if _, err := p.service.RecordReceipt(ctx, receipt); err != nil {
+			if errors.Is(err, ErrInvalidReceiptData) {
+				if err := markInvalidEventDelivered(ctx, p.outbox, event.ID, "invalid_purchase_receipt", err); err != nil {
 					return processed, err
 				}
 				continue

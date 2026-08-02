@@ -411,6 +411,16 @@ func registerPurchasingRoutes(mux *http.ServeMux, deps purchasingDependencies) {
 		WriteJSON(w, http.StatusOK, map[string]any{"purchase_order": toPurchaseOrderResponse(order), "request_id": RequestID(r.Context())})
 	})))
 
+	mux.Handle("POST /purchase-orders/{id}/cancel", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		locationID, _ := tenancy.LocationID(r.Context())
+		order, err := deps.service.CancelPurchaseOrder(r.Context(), locationID, r.PathValue("id"))
+		if err != nil {
+			writePurchasingError(w, r, err)
+			return
+		}
+		WriteJSON(w, http.StatusOK, map[string]any{"purchase_order": toPurchaseOrderResponse(order), "request_id": RequestID(r.Context())})
+	})))
+
 	mux.Handle("GET /receipts", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		locationID, _ := tenancy.LocationID(r.Context())
 		receipts, err := deps.service.ListReceipts(r.Context(), locationID)

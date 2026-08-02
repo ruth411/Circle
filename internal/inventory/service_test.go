@@ -230,6 +230,65 @@ func TestRecordReceiptAggregatesSameIngredientLines(t *testing.T) {
 	}
 }
 
+func TestProcessPendingPurchaseReceiptsRecordsMovements(t *testing.T) {
+	now := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
+	receipt := contracts.PurchaseReceipt{
+		ReceiptID:  "rec-1",
+		LocationID: "loc-1",
+		OccurredAt: now,
+		SourceType: contracts.PurchaseReceiptSourceType,
+		SourceID:   "rec-1",
+		Lines: []contracts.PurchaseReceiptLine{
+			{
+				IngredientID:      "chicken",
+				QuantityBaseUnits: 1500,
+				Unit:              ingredient.UnitGram,
+			},
+		},
+	}
+	payload, err := json.Marshal(receipt)
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+
+	outbox := &events.MemoryOutbox{}
+	if err := outbox.Append(context.Background(), events.Event{
+		ID:          "evt-1",
+		Name:        contracts.PurchaseReceiptEventName,
+		AggregateID: receipt.ReceiptID,
+		LocationID:  receipt.LocationID,
+		Payload:     payload,
+		OccurredAt:  now,
+	}); err != nil {
+		t.Fatalf("Append returned error: %v", err)
+	}
+
+	service := NewService(newMemoryRepository(nil))
+	processor := NewProcessor(outbox, service)
+
+	processed, err := processor.ProcessPendingClosedOrders(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("ProcessPendingClosedOrders returned error: %v", err)
+	}
+	if processed != 1 {
+		t.Fatalf("processed = %d, want 1", processed)
+	}
+
+	movements, err := service.Movements(context.Background(), "loc-1")
+	if err != nil {
+		t.Fatalf("Movements returned error: %v", err)
+	}
+	if len(movements) != 1 {
+		t.Fatalf("movement count = %d, want 1", len(movements))
+	}
+	if movements[0].Quantity != 1500 {
+		t.Fatalf("movement quantity = %v, want 1500", movements[0].Quantity)
+	}
+	if movements[0].SourceType != contracts.PurchaseReceiptSourceType {
+		t.Fatalf("movement source type = %q, want %q", movements[0].SourceType, contracts.PurchaseReceiptSourceType)
+	}
+}
+
 func TestMovementIDsAreNamespacedBySourceType(t *testing.T) {
 	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
 	service := NewService(newMemoryRepository(nil))

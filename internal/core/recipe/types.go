@@ -76,6 +76,8 @@ type SnapshotModifier struct {
 	Name            string
 	PriceDeltaMinor int64
 	Currency        string
+	CostMinor       int64
+	LowConfidence   bool
 	MacroDelta      ingredient.MacroValues
 	IngredientUsage map[string]float64
 	IngredientUnits map[string]ingredient.Unit
@@ -98,6 +100,8 @@ type SnapshotItem struct {
 	Description     string
 	PriceMinor      int64
 	Currency        string
+	CostMinor       int64
+	LowConfidence   bool
 	Macros          ingredient.MacroValues
 	IngredientUsage map[string]float64
 	IngredientUnits map[string]ingredient.Unit

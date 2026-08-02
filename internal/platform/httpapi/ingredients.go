@@ -5,8 +5,10 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/ruth411/circle/internal/core/ingredient"
+	"github.com/ruth411/circle/internal/inventory"
 	"github.com/ruth411/circle/internal/tenancy"
 )
 
@@ -16,6 +18,7 @@ var errRequestBodyTooLarge = errors.New("request body too large")
 
 type ingredientDependencies struct {
 	service              *ingredient.Service
+	inventoryService     *inventory.Service
 	locationResolver     tenancy.Resolver
 	organizationResolver tenancy.OrganizationResolver
 	sessionValidator     SessionValidator
@@ -68,6 +71,29 @@ type ingredientResponse struct {
 	YieldFactors           map[string]float64            `json:"yield_factors,omitempty"`
 }
 
+type resolvedIngredientResponse struct {
+	ID                          string                        `json:"id"`
+	LocationID                  string                        `json:"location_id"`
+	SourceItemID                string                        `json:"source_item_id,omitempty"`
+	Name                        string                        `json:"name"`
+	Category                    string                        `json:"category"`
+	BaseUnit                    ingredient.Unit               `json:"base_unit"`
+	MacrosPerBaseUnit           macroPayload                  `json:"macros_per_base_unit"`
+	CurrentCostPerBaseUnit      float64                       `json:"current_cost_per_base_unit"`
+	LastReceivedCostPerBaseUnit float64                       `json:"last_received_cost_per_base_unit"`
+	LastReceivedAt              *time.Time                    `json:"last_received_at,omitempty"`
+	Currency                    string                        `json:"currency"`
+	OnHandBaseUnits             float64                       `json:"on_hand_base_units"`
+	ParLevelBaseUnits           float64                       `json:"par_level_base_units"`
+	Provenance                  ingredient.Provenance         `json:"provenance"`
+	VerificationStatus          ingredient.VerificationStatus `json:"verification_status"`
+	LowConfidence               bool                          `json:"low_confidence"`
+	ServingSizeQuantity         float64                       `json:"serving_size_quantity"`
+	ServingSizeUnit             string                        `json:"serving_size_unit"`
+	AlternateUnits              map[ingredient.Unit]float64   `json:"alternate_units,omitempty"`
+	YieldFactors                map[string]float64            `json:"yield_factors,omitempty"`
+}
+
 func registerIngredientRoutes(mux *http.ServeMux, deps ingredientDependencies) {
 	if deps.service == nil || deps.sessionValidator == nil {
 		return
@@ -116,6 +142,30 @@ func registerIngredientRoutes(mux *http.ServeMux, deps ingredientDependencies) {
 
 		WriteJSON(w, http.StatusCreated, map[string]any{
 			"ingredient": toIngredientResponse(created),
+			"request_id": RequestID(r.Context()),
+		})
+	})))
+
+	mux.Handle("GET /ingredients/{id}/resolved", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if deps.inventoryService == nil {
+			WriteError(w, r, http.StatusInternalServerError, "internal_error", "internal server error")
+			return
+		}
+
+		locationID, _ := tenancy.LocationID(r.Context())
+		value, err := deps.service.Get(r.Context(), locationID, r.PathValue("id"))
+		if err != nil {
+			writeIngredientError(w, r, err)
+			return
+		}
+		onHandItems, err := deps.inventoryService.OnHand(r.Context(), locationID)
+		if err != nil {
+			WriteError(w, r, http.StatusInternalServerError, "internal_error", "internal server error")
+			return
+		}
+
+		WriteJSON(w, http.StatusOK, map[string]any{
+			"ingredient": toResolvedIngredientResponse(value, findOnHandBaseUnits(onHandItems, value.ID)),
 			"request_id": RequestID(r.Context()),
 		})
 	})))
@@ -199,6 +249,40 @@ func toIngredientResponse(value ingredient.Ingredient) ingredientResponse {
 		AlternateUnits:         value.AlternateUnits,
 		YieldFactors:           value.YieldFactors,
 	}
+}
+
+func toResolvedIngredientResponse(value ingredient.Ingredient, onHandBaseUnits float64) resolvedIngredientResponse {
+	return resolvedIngredientResponse{
+		ID:                          value.ID,
+		LocationID:                  value.LocationID,
+		SourceItemID:                value.SourceItemID,
+		Name:                        value.Name,
+		Category:                    value.Category,
+		BaseUnit:                    value.BaseUnit,
+		MacrosPerBaseUnit:           macroPayload{Calories: value.MacrosPerBaseUnit.Calories, ProteinGrams: value.MacrosPerBaseUnit.ProteinGrams, CarbsGrams: value.MacrosPerBaseUnit.CarbsGrams, FatGrams: value.MacrosPerBaseUnit.FatGrams},
+		CurrentCostPerBaseUnit:      value.CurrentCostPerBaseUnit.Float64(),
+		LastReceivedCostPerBaseUnit: value.LastReceivedCostPerBaseUnit.Float64(),
+		LastReceivedAt:              value.LastReceivedAt,
+		Currency:                    value.Currency,
+		OnHandBaseUnits:             onHandBaseUnits,
+		ParLevelBaseUnits:           value.ParLevelBaseUnits,
+		Provenance:                  value.Provenance,
+		VerificationStatus:          value.VerificationStatus,
+		LowConfidence:               value.VerificationStatus != ingredient.VerificationVerified,
+		ServingSizeQuantity:         value.ServingSizeQuantity,
+		ServingSizeUnit:             value.ServingSizeUnit,
+		AlternateUnits:              value.AlternateUnits,
+		YieldFactors:                value.YieldFactors,
+	}
+}
+
+func findOnHandBaseUnits(items []inventory.OnHandItem, ingredientID string) float64 {
+	for _, item := range items {
+		if item.IngredientID == ingredientID {
+			return item.OnHandQuantity
+		}
+	}
+	return 0
 }
 
 func writeIngredientError(w http.ResponseWriter, r *http.Request, err error) {

@@ -177,3 +177,36 @@ func TestProjectMigrationsHardenDinerConstraints(t *testing.T) {
 		}
 	}
 }
+
+func TestProjectMigrationsHardenProvisioningConstraints(t *testing.T) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+
+	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
+	migrations, err := LoadMigrations(filepath.Join(root, "migrations"))
+	if err != nil {
+		t.Fatalf("LoadMigrations returned error: %v", err)
+	}
+
+	var combined string
+	for _, migration := range migrations {
+		combined += migration.SQL
+	}
+
+	requiredSnippets := []string{
+		"identity_users_organization_fk",
+		"identity_users_location_fk",
+		"identity_roles_organization_fk",
+		"identity_roles_location_fk",
+		"identity_sessions_organization_fk",
+		"identity_sessions_location_fk",
+	}
+
+	for _, snippet := range requiredSnippets {
+		if !strings.Contains(combined, snippet) {
+			t.Fatalf("combined migrations missing %q", snippet)
+		}
+	}
+}

@@ -114,6 +114,113 @@ func (r *memoryRepository) ListMovements(_ context.Context, locationID string) (
 	return out, nil
 }
 
+func (r *memoryRepository) OnHand(_ context.Context, locationID string) ([]OnHandItem, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	type summary struct {
+		unit     ingredient.Unit
+		quantity float64
+	}
+	summaries := map[string]summary{}
+	for _, movement := range r.movements {
+		if movement.LocationID != locationID {
+			continue
+		}
+		current := summaries[movement.IngredientID]
+		current.unit = movement.Unit
+		current.quantity += movement.Quantity
+		summaries[movement.IngredientID] = current
+	}
+
+	ingredientIDs := make([]string, 0, len(summaries))
+	for ingredientID := range summaries {
+		ingredientIDs = append(ingredientIDs, ingredientID)
+	}
+	slices.Sort(ingredientIDs)
+
+	out := make([]OnHandItem, 0, len(ingredientIDs))
+	for _, ingredientID := range ingredientIDs {
+		item := summaries[ingredientID]
+		out = append(out, OnHandItem{
+			LocationID:     locationID,
+			IngredientID:   ingredientID,
+			IngredientName: ingredientID,
+			BaseUnit:       item.unit,
+			OnHandQuantity: item.quantity,
+		})
+	}
+	return out, nil
+}
+
+func (r *memoryRepository) ListOrganizationMovements(_ context.Context, _ string, locationID string) ([]Movement, error) {
+	if locationID == "" {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		return append([]Movement(nil), r.movements...), nil
+	}
+	return r.ListMovements(context.Background(), locationID)
+}
+
+func (r *memoryRepository) OrganizationOnHand(_ context.Context, _ string, locationID string) ([]OnHandItem, error) {
+	if locationID != "" {
+		return r.OnHand(context.Background(), locationID)
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	type key struct {
+		locationID   string
+		ingredientID string
+	}
+	type summary struct {
+		unit     ingredient.Unit
+		quantity float64
+	}
+	summaries := map[key]summary{}
+	for _, movement := range r.movements {
+		k := key{locationID: movement.LocationID, ingredientID: movement.IngredientID}
+		current := summaries[k]
+		current.unit = movement.Unit
+		current.quantity += movement.Quantity
+		summaries[k] = current
+	}
+
+	keys := make([]key, 0, len(summaries))
+	for k := range summaries {
+		keys = append(keys, k)
+	}
+	slices.SortFunc(keys, func(a key, b key) int {
+		if a.locationID != b.locationID {
+			if a.locationID < b.locationID {
+				return -1
+			}
+			return 1
+		}
+		if a.ingredientID < b.ingredientID {
+			return -1
+		}
+		if a.ingredientID > b.ingredientID {
+			return 1
+		}
+		return 0
+	})
+
+	out := make([]OnHandItem, 0, len(keys))
+	for _, k := range keys {
+		item := summaries[k]
+		out = append(out, OnHandItem{
+			LocationID:     k.locationID,
+			IngredientID:   k.ingredientID,
+			IngredientName: k.ingredientID,
+			BaseUnit:       item.unit,
+			OnHandQuantity: item.quantity,
+		})
+	}
+	return out, nil
+}
+
 func aggregateUsageAndUnits(order contracts.ClosedOrder) (map[string]float64, map[string]ingredient.Unit, error) {
 	usage := map[string]float64{}
 	units := map[string]ingredient.Unit{}

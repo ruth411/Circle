@@ -57,6 +57,7 @@ type orderResponse struct {
 	BusinessDate    string               `json:"business_date"`
 	Status          ordering.OrderStatus `json:"status"`
 	TotalMinor      int64                `json:"total_minor"`
+	TotalMacros     macroPayload         `json:"total_macros"`
 	Currency        string               `json:"currency"`
 	ClosedAt        *time.Time           `json:"closed_at,omitempty"`
 	Lines           []orderLineResponse  `json:"lines"`
@@ -203,8 +204,13 @@ func registerOrderingRoutes(mux *http.ServeMux, deps orderingDependencies) {
 
 func toOrderResponse(order ordering.Order) orderResponse {
 	lines := make([]orderLineResponse, len(order.Lines))
+	totalMacros := macroPayload{}
 	for i, line := range order.Lines {
 		lines[i] = toOrderLineResponse(line)
+		totalMacros.Calories += line.ResolvedMacros.Calories
+		totalMacros.ProteinGrams += line.ResolvedMacros.ProteinGrams
+		totalMacros.CarbsGrams += line.ResolvedMacros.CarbsGrams
+		totalMacros.FatGrams += line.ResolvedMacros.FatGrams
 	}
 
 	return orderResponse{
@@ -216,6 +222,7 @@ func toOrderResponse(order ordering.Order) orderResponse {
 		BusinessDate:    order.BusinessDate.String(),
 		Status:          order.Status,
 		TotalMinor:      order.TotalMinor,
+		TotalMacros:     totalMacros,
 		Currency:        order.Currency,
 		ClosedAt:        order.ClosedAt,
 		Lines:           lines,

@@ -528,6 +528,8 @@ func TestMenuSnapshotCreateRouteCreatesSnapshot(t *testing.T) {
 		resolveRecipeFn: func(_ context.Context, locationID string, recipeID string) (recipe.ResolvedRecipeData, error) {
 			return recipe.ResolvedRecipeData{
 				Macros:          ingredient.MacroValues{Calories: 500, ProteinGrams: 40},
+				CostMinor:       987,
+				LowConfidence:   true,
 				IngredientUsage: map[string]float64{"chicken": 150},
 				IngredientUnits: map[string]ingredient.Unit{"chicken": ingredient.UnitGram},
 			}, nil
@@ -535,6 +537,8 @@ func TestMenuSnapshotCreateRouteCreatesSnapshot(t *testing.T) {
 		resolveModifierFn: func(_ context.Context, locationID string, modifier recipe.Modifier) (recipe.ResolvedModifierData, error) {
 			return recipe.ResolvedModifierData{
 				MacroDelta:      ingredient.MacroValues{Calories: 120, ProteinGrams: 12},
+				CostMinor:       222,
+				LowConfidence:   false,
 				IngredientUsage: map[string]float64{"chicken": 50},
 				IngredientUnits: map[string]ingredient.Unit{"chicken": ingredient.UnitGram},
 			}, nil
@@ -568,6 +572,15 @@ func TestMenuSnapshotCreateRouteCreatesSnapshot(t *testing.T) {
 	}
 	if payload.Snapshot.Items[0].Macros.Calories != 500 {
 		t.Fatalf("snapshot calories = %v, want 500", payload.Snapshot.Items[0].Macros.Calories)
+	}
+	if payload.Snapshot.Items[0].CostMinor != 987 {
+		t.Fatalf("snapshot cost = %d, want 987", payload.Snapshot.Items[0].CostMinor)
+	}
+	if !payload.Snapshot.Items[0].LowConfidence {
+		t.Fatal("snapshot low confidence = false, want true")
+	}
+	if payload.Snapshot.Items[0].ModifierGroups[0].Modifiers[0].CostMinor != 222 {
+		t.Fatalf("modifier cost = %d, want 222", payload.Snapshot.Items[0].ModifierGroups[0].Modifiers[0].CostMinor)
 	}
 }
 
@@ -755,6 +768,8 @@ func sampleSnapshot(locationID string, snapshotID string) recipe.MenuSnapshot {
 			PriceMinor:      995,
 			Currency:        "USD",
 			Macros:          ingredient.MacroValues{Calories: 500, ProteinGrams: 40},
+			CostMinor:       987,
+			LowConfidence:   true,
 			IngredientUsage: map[string]float64{"chicken": 150},
 			IngredientUnits: map[string]ingredient.Unit{"chicken": ingredient.UnitGram},
 			ModifierGroups: []recipe.SnapshotModifierGroup{{
@@ -771,6 +786,7 @@ func sampleSnapshot(locationID string, snapshotID string) recipe.MenuSnapshot {
 					PriceDeltaMinor: 0,
 					Currency:        "USD",
 					MacroDelta:      ingredient.MacroValues{Calories: 20},
+					CostMinor:       42,
 					IngredientUsage: map[string]float64{"tomato": 30},
 					IngredientUnits: map[string]ingredient.Unit{"tomato": ingredient.UnitGram},
 				}},

@@ -50,6 +50,8 @@ func (r loadedSnapshotResolver) ResolveRecipe(_ context.Context, _ string, recip
 
 	return recipe.ResolvedRecipeData{
 		Macros:          resolved.PerServing,
+		CostMinor:       resolved.PerServingCostMinor,
+		LowConfidence:   resolved.Confidence.Level != nutrition.ConfidenceHigh,
 		IngredientUsage: cloneUsage(resolved.IngredientUsage),
 		IngredientUnits: cloneUnits(resolved.IngredientUnits),
 	}, nil
@@ -71,6 +73,8 @@ func (r loadedSnapshotResolver) ResolveModifier(_ context.Context, _ string, mod
 
 	return recipe.ResolvedModifierData{
 		MacroDelta:      resolved.MacroDelta,
+		CostMinor:       resolved.CostDeltaMinor,
+		LowConfidence:   resolved.Confidence.Level != nutrition.ConfidenceHigh,
 		IngredientUsage: cloneUsage(resolved.IngredientUsage),
 		IngredientUnits: cloneUnits(resolved.IngredientUnits),
 	}, nil

@@ -15,6 +15,7 @@ import (
 	"github.com/ruth411/circle/internal/core/ingredient"
 	"github.com/ruth411/circle/internal/core/recipe"
 	"github.com/ruth411/circle/internal/diner"
+	"github.com/ruth411/circle/internal/inventory"
 	"github.com/ruth411/circle/internal/ordering"
 	"github.com/ruth411/circle/internal/purchasing"
 	"github.com/ruth411/circle/internal/tenancy"
@@ -44,6 +45,7 @@ type Dependencies struct {
 	CatalogService       *recipe.CatalogService
 	DinerService         *diner.Service
 	OrderingService      *ordering.Service
+	InventoryService     *inventory.Service
 	PurchasingService    *purchasing.Service
 	SessionValidator     SessionValidator
 	LocationResolver     tenancy.Resolver
@@ -56,6 +58,7 @@ func NewServerWithDependencies(logger *slog.Logger, deps Dependencies) http.Hand
 	mux.HandleFunc("/readyz", healthz)
 	registerIngredientRoutes(mux, ingredientDependencies{
 		service:              deps.IngredientService,
+		inventoryService:     deps.InventoryService,
 		locationResolver:     deps.LocationResolver,
 		organizationResolver: deps.OrganizationResolver,
 		sessionValidator:     deps.SessionValidator,
@@ -74,6 +77,12 @@ func NewServerWithDependencies(logger *slog.Logger, deps Dependencies) http.Hand
 	})
 	registerOrderingRoutes(mux, orderingDependencies{
 		service:              deps.OrderingService,
+		locationResolver:     deps.LocationResolver,
+		organizationResolver: deps.OrganizationResolver,
+		sessionValidator:     deps.SessionValidator,
+	})
+	registerInventoryRoutes(mux, inventoryDependencies{
+		service:              deps.InventoryService,
 		locationResolver:     deps.LocationResolver,
 		organizationResolver: deps.OrganizationResolver,
 		sessionValidator:     deps.SessionValidator,

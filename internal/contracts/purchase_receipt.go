@@ -7,6 +7,7 @@ import (
 )
 
 const PurchaseReceiptSourceType = "purchase_receipt"
+const PurchaseReceiptEventName = "purchasing.receipt"
 
 type PurchaseReceipt struct {
 	ReceiptID  string

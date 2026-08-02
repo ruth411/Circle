@@ -106,6 +106,60 @@ func TestOrderAddLineRouteAddsResolvedLine(t *testing.T) {
 	}
 }
 
+func TestOrderGetRouteReturnsAggregateMacros(t *testing.T) {
+	service := seedOrderingService()
+	order, err := service.CreateOrder(bizContext(), ordering.CreateOrderInput{
+		OrderID:      "order-1",
+		LocationID:   "loc-1",
+		SnapshotID:   "snap-1",
+		BusinessDate: biztime.BusinessDate("2026-07-28"),
+	})
+	if err != nil {
+		t.Fatalf("CreateOrder returned error: %v", err)
+	}
+	if _, err := service.AddLine(bizContext(), ordering.AddLineInput{
+		LocationID:  "loc-1",
+		OrderID:     order.ID,
+		MenuItemID:  "bowl",
+		ModifierIDs: []string{"extra"},
+		Quantity:    2,
+	}); err != nil {
+		t.Fatalf("AddLine returned error: %v", err)
+	}
+
+	server := NewServerWithDependencies(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		OrderingService:      service,
+		SessionValidator:     seedSessionService(t, "loc-1"),
+		OrganizationResolver: tenancy.StaticOrganizationResolver{"loc-1": "org-1"},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/orders/"+order.ID, nil)
+	req.Header.Set("X-Location-Id", "loc-1")
+	req.Header.Set(sessionIDHeader, "session-1")
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body = %s", recorder.Code, recorder.Body.String())
+	}
+
+	var payload struct {
+		Order struct {
+			TotalMacros macroPayload `json:"total_macros"`
+		} `json:"order"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+	if payload.Order.TotalMacros.Calories != 1240 {
+		t.Fatalf("total calories = %v, want 1240", payload.Order.TotalMacros.Calories)
+	}
+	if payload.Order.TotalMacros.ProteinGrams != 104 {
+		t.Fatalf("total protein = %v, want 104", payload.Order.TotalMacros.ProteinGrams)
+	}
+}
+
 func TestOrderCloseRouteRejectsUnderpaidTender(t *testing.T) {
 	service := seedOrderingService()
 	order, err := service.CreateOrder(bizContext(), ordering.CreateOrderInput{

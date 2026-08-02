@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/ruth411/circle/internal/core/ingredient"
@@ -118,12 +119,12 @@ func (r *SQLRepository) CreateSnapshot(ctx context.Context, snapshot MenuSnapsho
 	}()
 
 	if err = lockSnapshotSeries(ctx, tx, snapshot.LocationID); err != nil {
-		return MenuSnapshot{}, err
+		return MenuSnapshot{}, fmt.Errorf("lock snapshot series: %w", err)
 	}
 
 	version, err := nextSnapshotVersion(ctx, tx, snapshot.LocationID)
 	if err != nil {
-		return MenuSnapshot{}, err
+		return MenuSnapshot{}, fmt.Errorf("next snapshot version: %w", err)
 	}
 	snapshot.Version = version
 
@@ -131,19 +132,19 @@ func (r *SQLRepository) CreateSnapshot(ctx context.Context, snapshot MenuSnapsho
 INSERT INTO recipe.menu_snapshots (id, location_id, version)
 VALUES ($1, $2, $3);
 `, snapshot.ID, snapshot.LocationID, snapshot.Version); err != nil {
-		return MenuSnapshot{}, mapSnapshotWriteError(err)
+		return MenuSnapshot{}, fmt.Errorf("insert snapshot row: %w", mapSnapshotWriteError(err))
 	}
 
 	if err = insertSnapshotItems(ctx, tx, snapshot); err != nil {
-		return MenuSnapshot{}, err
+		return MenuSnapshot{}, fmt.Errorf("insert snapshot items: %w", err)
 	}
 
 	created, err := getSnapshot(ctx, tx, snapshot.LocationID, snapshot.ID)
 	if err != nil {
-		return MenuSnapshot{}, err
+		return MenuSnapshot{}, fmt.Errorf("load created snapshot: %w", err)
 	}
 	if err = tx.Commit(); err != nil {
-		return MenuSnapshot{}, err
+		return MenuSnapshot{}, fmt.Errorf("commit snapshot transaction: %w", err)
 	}
 	return created, nil
 }
@@ -339,15 +340,21 @@ ORDER BY name, id;
 		if err := decodeStringSlice(defaultsRaw, &group.DefaultModifierIDs); err != nil {
 			return nil, err
 		}
-		modifiers, err := loadModifiers(ctx, db, locationID, group.ID)
+		groups = append(groups, group)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	for i := range groups {
+		modifiers, err := loadModifiers(ctx, db, locationID, groups[i].ID)
 		if err != nil {
 			return nil, err
 		}
-		group.Modifiers = modifiers
-		groups = append(groups, group)
+		groups[i].Modifiers = modifiers
 	}
 
-	return groups, rows.Err()
+	return groups, nil
 }
 
 func loadModifiers(ctx context.Context, db sqlQueryer, locationID string, groupID string) ([]Modifier, error) {
@@ -369,15 +376,21 @@ ORDER BY name, id;
 		if err := rows.Scan(&modifier.ID, &modifier.Name, &modifier.PriceDeltaMinor, &modifier.Currency); err != nil {
 			return nil, err
 		}
-		deltas, err := loadModifierIngredientDeltas(ctx, db, locationID, modifier.ID)
+		modifiers = append(modifiers, modifier)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	for i := range modifiers {
+		deltas, err := loadModifierIngredientDeltas(ctx, db, locationID, modifiers[i].ID)
 		if err != nil {
 			return nil, err
 		}
-		modifier.IngredientDeltas = deltas
-		modifiers = append(modifiers, modifier)
+		modifiers[i].IngredientDeltas = deltas
 	}
 
-	return modifiers, rows.Err()
+	return modifiers, nil
 }
 
 func loadModifierIngredientDeltas(ctx context.Context, db sqlQueryer, locationID string, modifierID string) ([]IngredientDelta, error) {
@@ -422,14 +435,13 @@ WHERE location_id = $1;
 
 func lockSnapshotSeries(ctx context.Context, db sqlQueryer, locationID string) error {
 	// ponytail: a per-location advisory lock is the smallest reliable fix for version allocation races.
-	rows, err := db.QueryContext(ctx, `
-SELECT pg_advisory_xact_lock(hashtext('recipe.menu_snapshots'), hashtext($1));
-`, locationID)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	return rows.Err()
+	var locked int
+	return db.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM (
+    SELECT pg_advisory_xact_lock(hashtext('recipe.menu_snapshots'), hashtext($1))
+) AS advisory_lock;
+`, locationID).Scan(&locked)
 }
 
 func insertSnapshotItems(ctx context.Context, db sqlQueryer, snapshot MenuSnapshot) error {
@@ -450,6 +462,8 @@ INSERT INTO recipe.menu_snapshot_items (
     description,
     price_minor,
     currency,
+    cost_minor,
+    low_confidence,
     calories,
     protein_grams,
     carbs_grams,
@@ -457,8 +471,8 @@ INSERT INTO recipe.menu_snapshot_items (
     ingredient_usage_json,
     ingredient_units_json
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12);
-`, snapshot.ID, item.MenuItemID, item.Name, item.Description, item.PriceMinor, item.Currency, item.Macros.Calories, item.Macros.ProteinGrams, item.Macros.CarbsGrams, item.Macros.FatGrams, usageJSON, unitsJSON); err != nil {
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14);
+`, snapshot.ID, item.MenuItemID, item.Name, item.Description, item.PriceMinor, item.Currency, item.CostMinor, item.LowConfidence, item.Macros.Calories, item.Macros.ProteinGrams, item.Macros.CarbsGrams, item.Macros.FatGrams, usageJSON, unitsJSON); err != nil {
 			return err
 		}
 
@@ -501,6 +515,8 @@ INSERT INTO recipe.menu_snapshot_modifiers (
     name,
     price_delta_minor,
     currency,
+    cost_minor,
+    low_confidence,
     calories,
     protein_grams,
     carbs_grams,
@@ -508,8 +524,8 @@ INSERT INTO recipe.menu_snapshot_modifiers (
     ingredient_usage_json,
     ingredient_units_json
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12);
-`, snapshot.ID, group.GroupID, modifier.ModifierID, modifier.Name, modifier.PriceDeltaMinor, modifier.Currency, modifier.MacroDelta.Calories, modifier.MacroDelta.ProteinGrams, modifier.MacroDelta.CarbsGrams, modifier.MacroDelta.FatGrams, usageJSON, unitsJSON); err != nil {
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14);
+`, snapshot.ID, group.GroupID, modifier.ModifierID, modifier.Name, modifier.PriceDeltaMinor, modifier.Currency, modifier.CostMinor, modifier.LowConfidence, modifier.MacroDelta.Calories, modifier.MacroDelta.ProteinGrams, modifier.MacroDelta.CarbsGrams, modifier.MacroDelta.FatGrams, usageJSON, unitsJSON); err != nil {
 					return err
 				}
 			}
@@ -566,7 +582,7 @@ WHERE id = $1;
 
 func loadSnapshotItems(ctx context.Context, db sqlQueryer, snapshotID string) ([]SnapshotItem, error) {
 	rows, err := db.QueryContext(ctx, `
-SELECT menu_item_id, name, description, price_minor, currency, calories, protein_grams, carbs_grams, fat_grams, ingredient_usage_json, ingredient_units_json
+SELECT menu_item_id, name, description, price_minor, currency, cost_minor, low_confidence, calories, protein_grams, carbs_grams, fat_grams, ingredient_usage_json, ingredient_units_json
 FROM recipe.menu_snapshot_items
 WHERE snapshot_id = $1
 ORDER BY name, menu_item_id;
@@ -581,7 +597,7 @@ ORDER BY name, menu_item_id;
 		var item SnapshotItem
 		var usageRaw []byte
 		var unitsRaw []byte
-		if err := rows.Scan(&item.MenuItemID, &item.Name, &item.Description, &item.PriceMinor, &item.Currency, &item.Macros.Calories, &item.Macros.ProteinGrams, &item.Macros.CarbsGrams, &item.Macros.FatGrams, &usageRaw, &unitsRaw); err != nil {
+		if err := rows.Scan(&item.MenuItemID, &item.Name, &item.Description, &item.PriceMinor, &item.Currency, &item.CostMinor, &item.LowConfidence, &item.Macros.Calories, &item.Macros.ProteinGrams, &item.Macros.CarbsGrams, &item.Macros.FatGrams, &usageRaw, &unitsRaw); err != nil {
 			return nil, err
 		}
 		if err := decodeIngredientUsage(usageRaw, &item.IngredientUsage); err != nil {
@@ -590,15 +606,21 @@ ORDER BY name, menu_item_id;
 		if err := decodeIngredientUnits(unitsRaw, &item.IngredientUnits); err != nil {
 			return nil, err
 		}
-		groups, err := loadSnapshotModifierGroups(ctx, db, snapshotID, item.MenuItemID)
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	for i := range items {
+		groups, err := loadSnapshotModifierGroups(ctx, db, snapshotID, items[i].MenuItemID)
 		if err != nil {
 			return nil, err
 		}
-		item.ModifierGroups = groups
-		items = append(items, item)
+		items[i].ModifierGroups = groups
 	}
 
-	return items, rows.Err()
+	return items, nil
 }
 
 func loadSnapshotModifierGroups(ctx context.Context, db sqlQueryer, snapshotID string, menuItemID string) ([]SnapshotModifierGroup, error) {
@@ -624,20 +646,26 @@ ORDER BY name, group_id;
 		if err := decodeStringSlice(defaultsRaw, &group.DefaultModifierIDs); err != nil {
 			return nil, err
 		}
-		modifiers, err := loadSnapshotModifiers(ctx, db, snapshotID, group.GroupID)
+		groups = append(groups, group)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	for i := range groups {
+		modifiers, err := loadSnapshotModifiers(ctx, db, snapshotID, groups[i].GroupID)
 		if err != nil {
 			return nil, err
 		}
-		group.Modifiers = modifiers
-		groups = append(groups, group)
+		groups[i].Modifiers = modifiers
 	}
 
-	return groups, rows.Err()
+	return groups, nil
 }
 
 func loadSnapshotModifiers(ctx context.Context, db sqlQueryer, snapshotID string, groupID string) ([]SnapshotModifier, error) {
 	rows, err := db.QueryContext(ctx, `
-SELECT modifier_id, name, price_delta_minor, currency, calories, protein_grams, carbs_grams, fat_grams, ingredient_usage_json, ingredient_units_json
+SELECT modifier_id, name, price_delta_minor, currency, cost_minor, low_confidence, calories, protein_grams, carbs_grams, fat_grams, ingredient_usage_json, ingredient_units_json
 FROM recipe.menu_snapshot_modifiers
 WHERE snapshot_id = $1
   AND group_id = $2
@@ -653,7 +681,7 @@ ORDER BY name, modifier_id;
 		var modifier SnapshotModifier
 		var usageRaw []byte
 		var unitsRaw []byte
-		if err := rows.Scan(&modifier.ModifierID, &modifier.Name, &modifier.PriceDeltaMinor, &modifier.Currency, &modifier.MacroDelta.Calories, &modifier.MacroDelta.ProteinGrams, &modifier.MacroDelta.CarbsGrams, &modifier.MacroDelta.FatGrams, &usageRaw, &unitsRaw); err != nil {
+		if err := rows.Scan(&modifier.ModifierID, &modifier.Name, &modifier.PriceDeltaMinor, &modifier.Currency, &modifier.CostMinor, &modifier.LowConfidence, &modifier.MacroDelta.Calories, &modifier.MacroDelta.ProteinGrams, &modifier.MacroDelta.CarbsGrams, &modifier.MacroDelta.FatGrams, &usageRaw, &unitsRaw); err != nil {
 			return nil, err
 		}
 		if err := decodeIngredientUsage(usageRaw, &modifier.IngredientUsage); err != nil {

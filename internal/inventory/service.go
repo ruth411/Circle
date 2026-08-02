@@ -18,6 +18,9 @@ type Repository interface {
 	RecordDepletion(context.Context, contracts.ClosedOrder) ([]Movement, error)
 	RecordReceipt(context.Context, contracts.PurchaseReceipt) ([]Movement, error)
 	ListMovements(context.Context, string) ([]Movement, error)
+	OnHand(context.Context, string) ([]OnHandItem, error)
+	ListOrganizationMovements(context.Context, string, string) ([]Movement, error)
+	OrganizationOnHand(context.Context, string, string) ([]OnHandItem, error)
 }
 
 type Movement struct {
@@ -30,6 +33,14 @@ type Movement struct {
 	Quantity     float64
 	Unit         ingredient.Unit
 	OccurredAt   time.Time
+}
+
+type OnHandItem struct {
+	LocationID     string
+	IngredientID   string
+	IngredientName string
+	BaseUnit       ingredient.Unit
+	OnHandQuantity float64
 }
 
 type Service struct {
@@ -66,6 +77,41 @@ func (s *Service) Movements(ctx context.Context, locationID string) ([]Movement,
 		return nil, fmt.Errorf("location id is required")
 	}
 	return s.repo.ListMovements(ctx, locationID)
+}
+
+func (s *Service) OnHand(ctx context.Context, locationID string) ([]OnHandItem, error) {
+	if s.repo == nil {
+		return nil, fmt.Errorf("inventory repository is required")
+	}
+	locationID = strings.TrimSpace(locationID)
+	if locationID == "" {
+		return nil, fmt.Errorf("location id is required")
+	}
+	return s.repo.OnHand(ctx, locationID)
+}
+
+func (s *Service) OrganizationMovements(ctx context.Context, organizationID string, locationID string) ([]Movement, error) {
+	if s.repo == nil {
+		return nil, fmt.Errorf("inventory repository is required")
+	}
+	organizationID = strings.TrimSpace(organizationID)
+	locationID = strings.TrimSpace(locationID)
+	if organizationID == "" {
+		return nil, fmt.Errorf("organization id is required")
+	}
+	return s.repo.ListOrganizationMovements(ctx, organizationID, locationID)
+}
+
+func (s *Service) OrganizationOnHand(ctx context.Context, organizationID string, locationID string) ([]OnHandItem, error) {
+	if s.repo == nil {
+		return nil, fmt.Errorf("inventory repository is required")
+	}
+	organizationID = strings.TrimSpace(organizationID)
+	locationID = strings.TrimSpace(locationID)
+	if organizationID == "" {
+		return nil, fmt.Errorf("organization id is required")
+	}
+	return s.repo.OrganizationOnHand(ctx, organizationID, locationID)
 }
 
 func (s *Service) RecordReceipt(ctx context.Context, receipt contracts.PurchaseReceipt) ([]Movement, error) {

@@ -86,3 +86,25 @@ func RequireStaffSession(validator SessionValidator, organizationResolver tenanc
 		next.ServeHTTP(w, r.WithContext(identity.WithSession(r.Context(), session)))
 	})
 }
+
+func RequireOrganizationSession(validator SessionValidator, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sessionID := strings.TrimSpace(r.Header.Get(sessionIDHeader))
+		if sessionID == "" {
+			WriteError(w, r, http.StatusUnauthorized, "session_required", "staff session is required")
+			return
+		}
+
+		session, err := validator.ValidateSession(r.Context(), sessionID)
+		if err != nil {
+			WriteError(w, r, http.StatusUnauthorized, "invalid_session", "staff session is invalid")
+			return
+		}
+		if session.ScopeType != identity.ScopeTypeOrganization {
+			WriteError(w, r, http.StatusForbidden, "organization_scope_required", "organization-scoped session is required")
+			return
+		}
+
+		next.ServeHTTP(w, r.WithContext(identity.WithSession(r.Context(), session)))
+	})
+}

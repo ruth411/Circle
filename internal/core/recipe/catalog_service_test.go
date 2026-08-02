@@ -184,6 +184,8 @@ func TestGenerateSnapshotBuildsDerivedModifierDataAndVersions(t *testing.T) {
 				}
 				return ResolvedRecipeData{
 					Macros:          ingredient.MacroValues{Calories: 25},
+					CostMinor:       321,
+					LowConfidence:   true,
 					IngredientUsage: map[string]float64{"salsa": 100},
 					IngredientUnits: map[string]ingredient.Unit{"salsa": ingredient.UnitGram},
 				}, nil
@@ -196,12 +198,16 @@ func TestGenerateSnapshotBuildsDerivedModifierDataAndVersions(t *testing.T) {
 				case "mod-chicken":
 					return ResolvedModifierData{
 						MacroDelta:      ingredient.MacroValues{Calories: 180, ProteinGrams: 32},
+						CostMinor:       210,
+						LowConfidence:   false,
 						IngredientUsage: map[string]float64{"chicken": 1},
 						IngredientUnits: map[string]ingredient.Unit{"chicken": ingredient.UnitGram},
 					}, nil
 				case "mod-guac":
 					return ResolvedModifierData{
 						MacroDelta:      ingredient.MacroValues{Calories: 230, FatGrams: 22},
+						CostMinor:       125,
+						LowConfidence:   true,
 						IngredientUsage: map[string]float64{"guac": 1},
 						IngredientUnits: map[string]ingredient.Unit{"guac": ingredient.UnitGram},
 					}, nil
@@ -233,6 +239,15 @@ func TestGenerateSnapshotBuildsDerivedModifierDataAndVersions(t *testing.T) {
 	}
 	if got := snapshot.Items[0].IngredientUnits["salsa"]; got != ingredient.UnitGram {
 		t.Fatalf("snapshot salsa unit = %s, want g", got)
+	}
+	if got := snapshot.Items[0].CostMinor; got != 321 {
+		t.Fatalf("snapshot cost = %d, want 321", got)
+	}
+	if !snapshot.Items[0].LowConfidence {
+		t.Fatal("snapshot low confidence = false, want true")
+	}
+	if got := snapshot.Items[0].ModifierGroups[0].Modifiers[0].CostMinor; got != 210 {
+		t.Fatalf("modifier cost = %d, want 210", got)
 	}
 
 	snapshot, err = service.GenerateSnapshot(context.Background(), GenerateSnapshotInput{

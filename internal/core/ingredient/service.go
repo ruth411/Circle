@@ -14,6 +14,7 @@ var (
 )
 
 type Repository interface {
+	Get(context.Context, string, string) (Ingredient, error)
 	List(context.Context, string, string) ([]Ingredient, error)
 	Create(context.Context, Ingredient) (Ingredient, error)
 	Update(context.Context, Ingredient) (Ingredient, error)
@@ -53,6 +54,17 @@ func (s *Service) List(ctx context.Context, locationID string, search string) ([
 	}
 
 	return s.repo.List(ctx, strings.TrimSpace(locationID), strings.TrimSpace(search))
+}
+
+func (s *Service) Get(ctx context.Context, locationID string, ingredientID string) (Ingredient, error) {
+	if strings.TrimSpace(locationID) == "" {
+		return Ingredient{}, fmt.Errorf("%w: location id is required", ErrInvalidIngredient)
+	}
+	if strings.TrimSpace(ingredientID) == "" {
+		return Ingredient{}, fmt.Errorf("%w: ingredient id is required", ErrInvalidIngredient)
+	}
+
+	return s.repo.Get(ctx, strings.TrimSpace(locationID), strings.TrimSpace(ingredientID))
 }
 
 func (s *Service) Create(ctx context.Context, input UpsertInput) (Ingredient, error) {

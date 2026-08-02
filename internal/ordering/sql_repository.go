@@ -596,14 +596,21 @@ ORDER BY created_at, line_id;
 		if err := decodeUnits(unitsRaw, &line.IngredientUnits); err != nil {
 			return nil, err
 		}
-		modifiers, err := loadLineModifiers(ctx, db, locationID, orderID, line.LineID)
+		lines = append(lines, line)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	for i := range lines {
+		modifiers, err := loadLineModifiers(ctx, db, locationID, orderID, lines[i].LineID)
 		if err != nil {
 			return nil, err
 		}
-		line.SelectedModifiers = modifiers
-		lines = append(lines, line)
+		lines[i].SelectedModifiers = modifiers
 	}
-	return lines, rows.Err()
+
+	return lines, nil
 }
 
 func loadLineModifiers(ctx context.Context, db sqlQueryer, locationID string, orderID string, lineID string) ([]recipe.SnapshotModifier, error) {

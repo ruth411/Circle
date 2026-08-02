@@ -39,12 +39,16 @@ type SnapshotResolverPreparer interface {
 
 type ResolvedRecipeData struct {
 	Macros          ingredient.MacroValues
+	CostMinor       int64
+	LowConfidence   bool
 	IngredientUsage map[string]float64
 	IngredientUnits map[string]ingredient.Unit
 }
 
 type ResolvedModifierData struct {
 	MacroDelta      ingredient.MacroValues
+	CostMinor       int64
+	LowConfidence   bool
 	IngredientUsage map[string]float64
 	IngredientUnits map[string]ingredient.Unit
 }
@@ -157,6 +161,8 @@ func (s *CatalogService) GenerateSnapshot(ctx context.Context, input GenerateSna
 					Name:            modifier.Name,
 					PriceDeltaMinor: modifier.PriceDeltaMinor,
 					Currency:        modifier.Currency,
+					CostMinor:       resolvedModifier.CostMinor,
+					LowConfidence:   resolvedModifier.LowConfidence,
 					MacroDelta:      resolvedModifier.MacroDelta,
 					IngredientUsage: cloneIngredientUsage(resolvedModifier.IngredientUsage),
 					IngredientUnits: cloneIngredientUnits(resolvedModifier.IngredientUnits),
@@ -181,6 +187,8 @@ func (s *CatalogService) GenerateSnapshot(ctx context.Context, input GenerateSna
 			Description:     item.Description,
 			PriceMinor:      item.PriceMinor,
 			Currency:        item.Currency,
+			CostMinor:       resolvedRecipe.CostMinor,
+			LowConfidence:   resolvedRecipe.LowConfidence,
 			Macros:          resolvedRecipe.Macros,
 			IngredientUsage: cloneIngredientUsage(resolvedRecipe.IngredientUsage),
 			IngredientUnits: cloneIngredientUnits(resolvedRecipe.IngredientUnits),

@@ -97,6 +97,7 @@ func main() {
 			CatalogService:       catalogService,
 			DinerService:         dinerService,
 			OrderingService:      orderingService,
+			InventoryService:     inventoryService,
 			PurchasingService:    purchasingService,
 			SessionValidator:     sessionValidator,
 			OrganizationResolver: tenancy.NewSQLOrganizationResolver(database),
