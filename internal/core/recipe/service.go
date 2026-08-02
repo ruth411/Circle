@@ -10,9 +10,10 @@ import (
 )
 
 var (
-	ErrRecipeNotFound = errors.New("recipe not found")
-	ErrInvalidRecipe  = errors.New("invalid recipe")
-	DefaultMaxDepth   = 5
+	ErrRecipeNotFound      = errors.New("recipe not found")
+	ErrRecipeAlreadyExists = errors.New("recipe already exists")
+	ErrInvalidRecipe       = errors.New("invalid recipe")
+	DefaultMaxDepth        = 5
 )
 
 type Repository interface {
@@ -141,7 +142,10 @@ func (s *Service) validateTargets(ctx context.Context, root Recipe) error {
 		case LineTargetIngredient:
 			ing, err := s.ingredients.Get(ctx, root.LocationID, line.TargetID)
 			if err != nil {
-				return fmt.Errorf("%w: ingredient %s not found", ErrInvalidRecipe, line.TargetID)
+				if errors.Is(err, ingredient.ErrNotFound) {
+					return fmt.Errorf("%w: ingredient %s not found", ErrInvalidRecipe, line.TargetID)
+				}
+				return err
 			}
 			if _, err := ing.ToBaseUnit(line.Quantity, line.Unit); err != nil {
 				return fmt.Errorf("%w: %v", ErrInvalidRecipe, err)

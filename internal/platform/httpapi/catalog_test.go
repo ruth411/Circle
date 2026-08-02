@@ -20,6 +20,9 @@ type fakeCatalogRepository struct {
 	listMenuItemsFn  func(context.Context, string) ([]recipe.MenuItem, error)
 	createMenuItemFn func(context.Context, recipe.MenuItem) (recipe.MenuItem, error)
 	updateMenuItemFn func(context.Context, recipe.MenuItem) (recipe.MenuItem, error)
+	createSnapshotFn func(context.Context, recipe.MenuSnapshot) (recipe.MenuSnapshot, error)
+	getSnapshotFn    func(context.Context, string, string) (recipe.MenuSnapshot, error)
+	listSnapshotsFn  func(context.Context, string) ([]recipe.MenuSnapshot, error)
 }
 
 func (f fakeCatalogRepository) GetMenuItem(ctx context.Context, locationID string, menuItemID string) (recipe.MenuItem, error) {
@@ -38,16 +41,29 @@ func (f fakeCatalogRepository) UpdateMenuItem(ctx context.Context, item recipe.M
 	return f.updateMenuItemFn(ctx, item)
 }
 
-func (f fakeCatalogRepository) CreateSnapshot(context.Context, recipe.MenuSnapshot) (recipe.MenuSnapshot, error) {
-	panic("unexpected CreateSnapshot call")
+func (f fakeCatalogRepository) CreateSnapshot(ctx context.Context, snapshot recipe.MenuSnapshot) (recipe.MenuSnapshot, error) {
+	return f.createSnapshotFn(ctx, snapshot)
 }
 
-func (f fakeCatalogRepository) GetSnapshot(context.Context, string, string) (recipe.MenuSnapshot, error) {
-	panic("unexpected GetSnapshot call")
+func (f fakeCatalogRepository) GetSnapshot(ctx context.Context, locationID string, snapshotID string) (recipe.MenuSnapshot, error) {
+	return f.getSnapshotFn(ctx, locationID, snapshotID)
 }
 
-func (f fakeCatalogRepository) ListSnapshots(context.Context, string) ([]recipe.MenuSnapshot, error) {
-	panic("unexpected ListSnapshots call")
+func (f fakeCatalogRepository) ListSnapshots(ctx context.Context, locationID string) ([]recipe.MenuSnapshot, error) {
+	return f.listSnapshotsFn(ctx, locationID)
+}
+
+type fakeCatalogSnapshotResolver struct {
+	resolveRecipeFn   func(context.Context, string, string) (recipe.ResolvedRecipeData, error)
+	resolveModifierFn func(context.Context, string, recipe.Modifier) (recipe.ResolvedModifierData, error)
+}
+
+func (f fakeCatalogSnapshotResolver) ResolveRecipe(ctx context.Context, locationID string, recipeID string) (recipe.ResolvedRecipeData, error) {
+	return f.resolveRecipeFn(ctx, locationID, recipeID)
+}
+
+func (f fakeCatalogSnapshotResolver) ResolveModifier(ctx context.Context, locationID string, modifier recipe.Modifier) (recipe.ResolvedModifierData, error) {
+	return f.resolveModifierFn(ctx, locationID, modifier)
 }
 
 func TestMenuItemCreateRouteCreatesMenuItem(t *testing.T) {
@@ -419,6 +435,53 @@ func TestMenuItemCreateRouteRejectsUnknownFields(t *testing.T) {
 	}
 }
 
+func TestMenuItemCreateRouteReturnsConflictOnDuplicate(t *testing.T) {
+	service := recipe.NewCatalogService(fakeCatalogRepository{
+		createMenuItemFn: func(_ context.Context, item recipe.MenuItem) (recipe.MenuItem, error) {
+			return recipe.MenuItem{}, recipe.ErrMenuItemAlreadyExists
+		},
+	}, fakeRecipeRepository{
+		getFn: func(_ context.Context, locationID string, recipeID string) (recipe.Recipe, error) {
+			return recipe.Recipe{ID: recipeID, LocationID: locationID, Name: "Chicken Bowl", YieldCount: 1}, nil
+		},
+	}, fakeRecipeIngredientLookup{
+		getFn: func(_ context.Context, locationID string, ingredientID string) (ingredient.Ingredient, error) {
+			return ingredient.Ingredient{ID: ingredientID, LocationID: locationID, BaseUnit: ingredient.UnitGram}, nil
+		},
+	}, nil)
+
+	server := NewServerWithDependencies(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		CatalogService:       service,
+		SessionValidator:     seedSessionService(t, "loc-1"),
+		OrganizationResolver: tenancy.StaticOrganizationResolver{"loc-1": "org-1"},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/menu-items", bytes.NewBufferString(`{
+		"id":"item-1",
+		"recipe_id":"rec-1",
+		"name":"Chicken Bowl",
+		"price_minor":995,
+		"currency":"USD",
+		"modifier_groups":[]
+	}`))
+	req.Header.Set("X-Location-Id", "loc-1")
+	req.Header.Set(sessionIDHeader, "session-1")
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var payload ErrorResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+	if payload.Error.Code != "menu_item_already_exists" {
+		t.Fatalf("error code = %q, want menu_item_already_exists", payload.Error.Code)
+	}
+}
+
 func TestMenuItemGetRouteReturnsNotFound(t *testing.T) {
 	service := recipe.NewCatalogService(fakeCatalogRepository{
 		getMenuItemFn: func(_ context.Context, locationID string, menuItemID string) (recipe.MenuItem, error) {
@@ -452,6 +515,201 @@ func TestMenuItemGetRouteReturnsNotFound(t *testing.T) {
 	}
 }
 
+func TestMenuSnapshotCreateRouteCreatesSnapshot(t *testing.T) {
+	service := recipe.NewCatalogService(fakeCatalogRepository{
+		listMenuItemsFn: func(_ context.Context, locationID string) ([]recipe.MenuItem, error) {
+			return []recipe.MenuItem{sampleMenuItem(locationID, "item-1")}, nil
+		},
+		createSnapshotFn: func(_ context.Context, snapshot recipe.MenuSnapshot) (recipe.MenuSnapshot, error) {
+			snapshot.Version = 1
+			return snapshot, nil
+		},
+	}, fakeRecipeRepository{}, fakeRecipeIngredientLookup{}, fakeCatalogSnapshotResolver{
+		resolveRecipeFn: func(_ context.Context, locationID string, recipeID string) (recipe.ResolvedRecipeData, error) {
+			return recipe.ResolvedRecipeData{
+				Macros:          ingredient.MacroValues{Calories: 500, ProteinGrams: 40},
+				IngredientUsage: map[string]float64{"chicken": 150},
+				IngredientUnits: map[string]ingredient.Unit{"chicken": ingredient.UnitGram},
+			}, nil
+		},
+		resolveModifierFn: func(_ context.Context, locationID string, modifier recipe.Modifier) (recipe.ResolvedModifierData, error) {
+			return recipe.ResolvedModifierData{
+				MacroDelta:      ingredient.MacroValues{Calories: 120, ProteinGrams: 12},
+				IngredientUsage: map[string]float64{"chicken": 50},
+				IngredientUnits: map[string]ingredient.Unit{"chicken": ingredient.UnitGram},
+			}, nil
+		},
+	})
+
+	server := NewServerWithDependencies(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		CatalogService:       service,
+		SessionValidator:     seedSessionService(t, "loc-1"),
+		OrganizationResolver: tenancy.StaticOrganizationResolver{"loc-1": "org-1"},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/menu-snapshots", bytes.NewBufferString(`{"id":"snap-1"}`))
+	req.Header.Set("X-Location-Id", "loc-1")
+	req.Header.Set(sessionIDHeader, "session-1")
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var payload struct {
+		Snapshot menuSnapshotResponse `json:"snapshot"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+	if payload.Snapshot.ID != "snap-1" {
+		t.Fatalf("snapshot id = %q, want snap-1", payload.Snapshot.ID)
+	}
+	if payload.Snapshot.Items[0].Macros.Calories != 500 {
+		t.Fatalf("snapshot calories = %v, want 500", payload.Snapshot.Items[0].Macros.Calories)
+	}
+}
+
+func TestMenuSnapshotCreateRouteReturnsConflictOnDuplicate(t *testing.T) {
+	service := recipe.NewCatalogService(fakeCatalogRepository{
+		listMenuItemsFn: func(_ context.Context, locationID string) ([]recipe.MenuItem, error) {
+			return []recipe.MenuItem{sampleMenuItem(locationID, "item-1")}, nil
+		},
+		createSnapshotFn: func(_ context.Context, snapshot recipe.MenuSnapshot) (recipe.MenuSnapshot, error) {
+			return recipe.MenuSnapshot{}, recipe.ErrSnapshotAlreadyExists
+		},
+	}, fakeRecipeRepository{}, fakeRecipeIngredientLookup{}, fakeCatalogSnapshotResolver{
+		resolveRecipeFn: func(_ context.Context, locationID string, recipeID string) (recipe.ResolvedRecipeData, error) {
+			return recipe.ResolvedRecipeData{Macros: ingredient.MacroValues{Calories: 500}}, nil
+		},
+		resolveModifierFn: func(_ context.Context, locationID string, modifier recipe.Modifier) (recipe.ResolvedModifierData, error) {
+			return recipe.ResolvedModifierData{}, nil
+		},
+	})
+
+	server := NewServerWithDependencies(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		CatalogService:       service,
+		SessionValidator:     seedSessionService(t, "loc-1"),
+		OrganizationResolver: tenancy.StaticOrganizationResolver{"loc-1": "org-1"},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/menu-snapshots", bytes.NewBufferString(`{"id":"snap-1"}`))
+	req.Header.Set("X-Location-Id", "loc-1")
+	req.Header.Set(sessionIDHeader, "session-1")
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var payload ErrorResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+	if payload.Error.Code != "snapshot_already_exists" {
+		t.Fatalf("error code = %q, want snapshot_already_exists", payload.Error.Code)
+	}
+}
+
+func TestMenuSnapshotListRouteListsSnapshots(t *testing.T) {
+	service := recipe.NewCatalogService(fakeCatalogRepository{
+		listSnapshotsFn: func(_ context.Context, locationID string) ([]recipe.MenuSnapshot, error) {
+			return []recipe.MenuSnapshot{{
+				ID:         "snap-1",
+				LocationID: locationID,
+				Version:    1,
+			}}, nil
+		},
+	}, fakeRecipeRepository{}, fakeRecipeIngredientLookup{}, nil)
+
+	server := NewServerWithDependencies(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		CatalogService:       service,
+		SessionValidator:     seedSessionService(t, "loc-1"),
+		OrganizationResolver: tenancy.StaticOrganizationResolver{"loc-1": "org-1"},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/menu-snapshots", nil)
+	req.Header.Set("X-Location-Id", "loc-1")
+	req.Header.Set(sessionIDHeader, "session-1")
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var payload struct {
+		Snapshots []menuSnapshotSummaryResponse `json:"snapshots"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+	if len(payload.Snapshots) != 1 {
+		t.Fatalf("snapshot count = %d, want 1", len(payload.Snapshots))
+	}
+}
+
+func TestMenuSnapshotGetRouteReturnsSnapshot(t *testing.T) {
+	service := recipe.NewCatalogService(fakeCatalogRepository{
+		getSnapshotFn: func(_ context.Context, locationID string, snapshotID string) (recipe.MenuSnapshot, error) {
+			return sampleSnapshot(locationID, snapshotID), nil
+		},
+	}, fakeRecipeRepository{}, fakeRecipeIngredientLookup{}, nil)
+
+	server := NewServerWithDependencies(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		CatalogService:       service,
+		SessionValidator:     seedSessionService(t, "loc-1"),
+		OrganizationResolver: tenancy.StaticOrganizationResolver{"loc-1": "org-1"},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/menu-snapshots/snap-1", nil)
+	req.Header.Set("X-Location-Id", "loc-1")
+	req.Header.Set(sessionIDHeader, "session-1")
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var payload struct {
+		Snapshot menuSnapshotResponse `json:"snapshot"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+	if payload.Snapshot.ID != "snap-1" {
+		t.Fatalf("snapshot id = %q, want snap-1", payload.Snapshot.ID)
+	}
+}
+
+func TestMenuSnapshotGetRouteReturnsNotFound(t *testing.T) {
+	service := recipe.NewCatalogService(fakeCatalogRepository{
+		getSnapshotFn: func(_ context.Context, locationID string, snapshotID string) (recipe.MenuSnapshot, error) {
+			return recipe.MenuSnapshot{}, recipe.ErrSnapshotNotFound
+		},
+	}, fakeRecipeRepository{}, fakeRecipeIngredientLookup{}, nil)
+
+	server := NewServerWithDependencies(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		CatalogService:       service,
+		SessionValidator:     seedSessionService(t, "loc-1"),
+		OrganizationResolver: tenancy.StaticOrganizationResolver{"loc-1": "org-1"},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/menu-snapshots/missing", nil)
+	req.Header.Set("X-Location-Id", "loc-1")
+	req.Header.Set(sessionIDHeader, "session-1")
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404, body = %s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func sampleMenuItem(locationID string, menuItemID string) recipe.MenuItem {
 	return recipe.MenuItem{
 		ID:          menuItemID,
@@ -479,6 +737,42 @@ func sampleMenuItem(locationID string, menuItemID string) recipe.MenuItem {
 					Quantity:     30,
 					Unit:         ingredient.UnitGram,
 					PrepMethod:   "fresh",
+				}},
+			}},
+		}},
+	}
+}
+
+func sampleSnapshot(locationID string, snapshotID string) recipe.MenuSnapshot {
+	return recipe.MenuSnapshot{
+		ID:         snapshotID,
+		LocationID: locationID,
+		Version:    1,
+		Items: []recipe.SnapshotItem{{
+			MenuItemID:      "item-1",
+			Name:            "Chicken Bowl",
+			Description:     "Base bowl",
+			PriceMinor:      995,
+			Currency:        "USD",
+			Macros:          ingredient.MacroValues{Calories: 500, ProteinGrams: 40},
+			IngredientUsage: map[string]float64{"chicken": 150},
+			IngredientUnits: map[string]ingredient.Unit{"chicken": ingredient.UnitGram},
+			ModifierGroups: []recipe.SnapshotModifierGroup{{
+				GroupID:            "grp-salsa",
+				Name:               "Salsa",
+				SelectionMin:       1,
+				SelectionMax:       1,
+				Required:           true,
+				Exclusive:          true,
+				DefaultModifierIDs: []string{"mod-fresh-tomato"},
+				Modifiers: []recipe.SnapshotModifier{{
+					ModifierID:      "mod-fresh-tomato",
+					Name:            "Fresh Tomato Salsa",
+					PriceDeltaMinor: 0,
+					Currency:        "USD",
+					MacroDelta:      ingredient.MacroValues{Calories: 20},
+					IngredientUsage: map[string]float64{"tomato": 30},
+					IngredientUnits: map[string]ingredient.Unit{"tomato": ingredient.UnitGram},
 				}},
 			}},
 		}},

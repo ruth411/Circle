@@ -196,6 +196,8 @@ func writeRecipeError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, recipe.ErrInvalidRecipe):
 		WriteError(w, r, http.StatusBadRequest, "invalid_recipe", err.Error())
+	case errors.Is(err, recipe.ErrRecipeAlreadyExists):
+		WriteError(w, r, http.StatusConflict, "recipe_already_exists", "recipe already exists")
 	case errors.Is(err, recipe.ErrRecipeNotFound):
 		WriteError(w, r, http.StatusNotFound, "recipe_not_found", "recipe not found")
 	default:

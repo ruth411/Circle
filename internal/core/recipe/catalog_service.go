@@ -10,10 +10,12 @@ import (
 )
 
 var (
-	ErrMenuItemNotFound = errors.New("menu item not found")
-	ErrSnapshotNotFound = errors.New("snapshot not found")
-	ErrInvalidMenuItem  = errors.New("invalid menu item")
-	ErrInvalidSnapshot  = errors.New("invalid snapshot")
+	ErrMenuItemNotFound      = errors.New("menu item not found")
+	ErrMenuItemAlreadyExists = errors.New("menu item already exists")
+	ErrSnapshotAlreadyExists = errors.New("snapshot already exists")
+	ErrSnapshotNotFound      = errors.New("snapshot not found")
+	ErrInvalidMenuItem       = errors.New("invalid menu item")
+	ErrInvalidSnapshot       = errors.New("invalid snapshot")
 )
 
 type CatalogRepository interface {
@@ -27,8 +29,12 @@ type CatalogRepository interface {
 }
 
 type SnapshotResolver interface {
-	ResolveRecipe(string) (ResolvedRecipeData, error)
-	ResolveModifier(Modifier) (ResolvedModifierData, error)
+	ResolveRecipe(context.Context, string, string) (ResolvedRecipeData, error)
+	ResolveModifier(context.Context, string, Modifier) (ResolvedModifierData, error)
+}
+
+type SnapshotResolverPreparer interface {
+	Prepare(context.Context, string) (SnapshotResolver, error)
 }
 
 type ResolvedRecipeData struct {
@@ -122,9 +128,17 @@ func (s *CatalogService) GenerateSnapshot(ctx context.Context, input GenerateSna
 		return MenuSnapshot{}, fmt.Errorf("%w: at least one menu item is required to generate a snapshot", ErrInvalidSnapshot)
 	}
 
+	resolver := s.resolver
+	if preparer, ok := s.resolver.(SnapshotResolverPreparer); ok {
+		resolver, err = preparer.Prepare(ctx, locationID)
+		if err != nil {
+			return MenuSnapshot{}, err
+		}
+	}
+
 	snapshotItems := make([]SnapshotItem, len(items))
 	for i, item := range items {
-		resolvedRecipe, err := s.resolver.ResolveRecipe(item.RecipeID)
+		resolvedRecipe, err := resolver.ResolveRecipe(ctx, locationID, item.RecipeID)
 		if err != nil {
 			return MenuSnapshot{}, err
 		}
@@ -133,7 +147,7 @@ func (s *CatalogService) GenerateSnapshot(ctx context.Context, input GenerateSna
 		for j, group := range item.ModifierGroups {
 			modifierSnapshots := make([]SnapshotModifier, len(group.Modifiers))
 			for k, modifier := range group.Modifiers {
-				resolvedModifier, err := s.resolver.ResolveModifier(modifier)
+				resolvedModifier, err := resolver.ResolveModifier(ctx, locationID, modifier)
 				if err != nil {
 					return MenuSnapshot{}, err
 				}
@@ -389,7 +403,10 @@ func (s *CatalogService) normalizeIngredientDelta(ctx context.Context, locationI
 	}
 	ing, err := s.ingredients.Get(ctx, locationID, delta.IngredientID)
 	if err != nil {
-		return IngredientDelta{}, fmt.Errorf("%w: ingredient %s not found", ErrInvalidMenuItem, delta.IngredientID)
+		if errors.Is(err, ingredient.ErrNotFound) {
+			return IngredientDelta{}, fmt.Errorf("%w: ingredient %s not found", ErrInvalidMenuItem, delta.IngredientID)
+		}
+		return IngredientDelta{}, err
 	}
 	if _, err := ing.ToBaseUnit(absFloat(delta.Quantity), delta.Unit); err != nil {
 		return IngredientDelta{}, fmt.Errorf("%w: %v", ErrInvalidMenuItem, err)

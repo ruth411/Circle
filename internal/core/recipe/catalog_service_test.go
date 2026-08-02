@@ -47,16 +47,16 @@ func (f fakeCatalogRepository) ListSnapshots(ctx context.Context, locationID str
 }
 
 type fakeSnapshotResolver struct {
-	resolveRecipeFn   func(string) (ResolvedRecipeData, error)
-	resolveModifierFn func(Modifier) (ResolvedModifierData, error)
+	resolveRecipeFn   func(context.Context, string, string) (ResolvedRecipeData, error)
+	resolveModifierFn func(context.Context, string, Modifier) (ResolvedModifierData, error)
 }
 
-func (f fakeSnapshotResolver) ResolveRecipe(recipeID string) (ResolvedRecipeData, error) {
-	return f.resolveRecipeFn(recipeID)
+func (f fakeSnapshotResolver) ResolveRecipe(ctx context.Context, locationID string, recipeID string) (ResolvedRecipeData, error) {
+	return f.resolveRecipeFn(ctx, locationID, recipeID)
 }
 
-func (f fakeSnapshotResolver) ResolveModifier(modifier Modifier) (ResolvedModifierData, error) {
-	return f.resolveModifierFn(modifier)
+func (f fakeSnapshotResolver) ResolveModifier(ctx context.Context, locationID string, modifier Modifier) (ResolvedModifierData, error) {
+	return f.resolveModifierFn(ctx, locationID, modifier)
 }
 
 func TestCreateMenuItemRejectsPriceOnlyModifier(t *testing.T) {
@@ -175,7 +175,10 @@ func TestGenerateSnapshotBuildsDerivedModifierDataAndVersions(t *testing.T) {
 		nil,
 		nil,
 		fakeSnapshotResolver{
-			resolveRecipeFn: func(recipeID string) (ResolvedRecipeData, error) {
+			resolveRecipeFn: func(_ context.Context, locationID string, recipeID string) (ResolvedRecipeData, error) {
+				if locationID != "loc-1" {
+					t.Fatalf("locationID = %q, want loc-1", locationID)
+				}
 				if recipeID != "rec-1" {
 					t.Fatalf("recipeID = %q, want rec-1", recipeID)
 				}
@@ -185,7 +188,10 @@ func TestGenerateSnapshotBuildsDerivedModifierDataAndVersions(t *testing.T) {
 					IngredientUnits: map[string]ingredient.Unit{"salsa": ingredient.UnitGram},
 				}, nil
 			},
-			resolveModifierFn: func(modifier Modifier) (ResolvedModifierData, error) {
+			resolveModifierFn: func(_ context.Context, locationID string, modifier Modifier) (ResolvedModifierData, error) {
+				if locationID != "loc-1" {
+					t.Fatalf("locationID = %q, want loc-1", locationID)
+				}
 				switch modifier.ID {
 				case "mod-chicken":
 					return ResolvedModifierData{
@@ -238,6 +244,61 @@ func TestGenerateSnapshotBuildsDerivedModifierDataAndVersions(t *testing.T) {
 	}
 	if snapshot.Version != 2 {
 		t.Fatalf("snapshot version = %d, want 2", snapshot.Version)
+	}
+}
+
+func TestCreateMenuItemPropagatesIngredientLookupInfrastructureError(t *testing.T) {
+	boom := errors.New("db unavailable")
+	service := NewCatalogService(
+		fakeCatalogRepository{
+			createMenuItemFn: func(_ context.Context, item MenuItem) (MenuItem, error) {
+				return item, nil
+			},
+		},
+		fakeRecipeRepository{
+			getFn: func(_ context.Context, locationID string, recipeID string) (Recipe, error) {
+				return Recipe{ID: recipeID, LocationID: locationID, Name: "recipe", YieldCount: 1, Lines: []RecipeLine{{TargetType: LineTargetIngredient, TargetID: "salsa", Quantity: 1, Unit: ingredient.UnitEach}}}, nil
+			},
+		},
+		fakeIngredientLookup{
+			getFn: func(_ context.Context, locationID string, ingredientID string) (ingredient.Ingredient, error) {
+				return ingredient.Ingredient{}, boom
+			},
+		},
+		nil,
+	)
+
+	_, err := service.CreateMenuItem(context.Background(), MenuItem{
+		ID:         "mi-1",
+		LocationID: "loc-1",
+		RecipeID:   "rec-1",
+		Name:       "Bowl",
+		PriceMinor: 845,
+		Currency:   "USD",
+		ModifierGroups: []ModifierGroup{{
+			ID:           "group-1",
+			Name:         "Protein",
+			SelectionMin: 1,
+			SelectionMax: 1,
+			Required:     true,
+			Exclusive:    true,
+			Modifiers: []Modifier{{
+				ID:       "mod-1",
+				Name:     "Chicken",
+				Currency: "USD",
+				IngredientDeltas: []IngredientDelta{{
+					IngredientID: "chicken",
+					Quantity:     1,
+					Unit:         ingredient.UnitEach,
+				}},
+			}},
+		}},
+	})
+	if !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want db unavailable", err)
+	}
+	if errors.Is(err, ErrInvalidMenuItem) {
+		t.Fatalf("err = %v, did not want ErrInvalidMenuItem", err)
 	}
 }
 

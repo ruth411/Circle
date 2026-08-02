@@ -94,6 +94,58 @@ type ingredientDeltaResponse struct {
 	PrepMethod   string          `json:"prep_method,omitempty"`
 }
 
+type snapshotRequest struct {
+	ID string `json:"id"`
+}
+
+type menuSnapshotSummaryResponse struct {
+	ID         string `json:"id"`
+	LocationID string `json:"location_id"`
+	Version    int    `json:"version"`
+	CreatedAt  string `json:"created_at,omitempty"`
+}
+
+type menuSnapshotResponse struct {
+	ID         string                 `json:"id"`
+	LocationID string                 `json:"location_id"`
+	Version    int                    `json:"version"`
+	CreatedAt  string                 `json:"created_at,omitempty"`
+	Items      []snapshotItemResponse `json:"items"`
+}
+
+type snapshotItemResponse struct {
+	MenuItemID      string                          `json:"menu_item_id"`
+	Name            string                          `json:"name"`
+	Description     string                          `json:"description,omitempty"`
+	PriceMinor      int64                           `json:"price_minor"`
+	Currency        string                          `json:"currency"`
+	Macros          macroPayload                    `json:"macros"`
+	IngredientUsage map[string]float64              `json:"ingredient_usage,omitempty"`
+	IngredientUnits map[string]ingredient.Unit      `json:"ingredient_units,omitempty"`
+	ModifierGroups  []snapshotModifierGroupResponse `json:"modifier_groups"`
+}
+
+type snapshotModifierGroupResponse struct {
+	GroupID            string                     `json:"group_id"`
+	Name               string                     `json:"name"`
+	SelectionMin       int                        `json:"selection_min"`
+	SelectionMax       int                        `json:"selection_max"`
+	Required           bool                       `json:"required"`
+	Exclusive          bool                       `json:"exclusive"`
+	DefaultModifierIDs []string                   `json:"default_modifier_ids,omitempty"`
+	Modifiers          []snapshotModifierResponse `json:"modifiers"`
+}
+
+type snapshotModifierResponse struct {
+	ModifierID      string                     `json:"modifier_id"`
+	Name            string                     `json:"name"`
+	PriceDeltaMinor int64                      `json:"price_delta_minor"`
+	Currency        string                     `json:"currency"`
+	MacroDelta      macroPayload               `json:"macro_delta"`
+	IngredientUsage map[string]float64         `json:"ingredient_usage,omitempty"`
+	IngredientUnits map[string]ingredient.Unit `json:"ingredient_units,omitempty"`
+}
+
 func registerCatalogRoutes(mux *http.ServeMux, deps catalogDependencies) {
 	if deps.service == nil || deps.sessionValidator == nil {
 		return
@@ -180,6 +232,62 @@ func registerCatalogRoutes(mux *http.ServeMux, deps catalogDependencies) {
 
 		WriteJSON(w, http.StatusOK, map[string]any{
 			"menu_item":  toMenuItemResponse(item),
+			"request_id": RequestID(r.Context()),
+		})
+	})))
+
+	mux.Handle("POST /menu-snapshots", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload snapshotRequest
+		if err := decodeSnapshotRequest(w, r, &payload); err != nil {
+			writeCatalogDecodeError(w, r, err)
+			return
+		}
+
+		locationID, _ := tenancy.LocationID(r.Context())
+		snapshot, err := deps.service.GenerateSnapshot(r.Context(), recipe.GenerateSnapshotInput{
+			ID:         payload.ID,
+			LocationID: locationID,
+		})
+		if err != nil {
+			writeCatalogError(w, r, err)
+			return
+		}
+
+		WriteJSON(w, http.StatusCreated, map[string]any{
+			"snapshot":   toMenuSnapshotResponse(snapshot),
+			"request_id": RequestID(r.Context()),
+		})
+	})))
+
+	mux.Handle("GET /menu-snapshots", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		locationID, _ := tenancy.LocationID(r.Context())
+		snapshots, err := deps.service.ListSnapshots(r.Context(), locationID)
+		if err != nil {
+			writeCatalogError(w, r, err)
+			return
+		}
+
+		payload := make([]menuSnapshotSummaryResponse, len(snapshots))
+		for i, snapshot := range snapshots {
+			payload[i] = toMenuSnapshotSummaryResponse(snapshot)
+		}
+
+		WriteJSON(w, http.StatusOK, map[string]any{
+			"snapshots":  payload,
+			"request_id": RequestID(r.Context()),
+		})
+	})))
+
+	mux.Handle("GET /menu-snapshots/{id}", protected(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		locationID, _ := tenancy.LocationID(r.Context())
+		snapshot, err := deps.service.GetSnapshot(r.Context(), locationID, r.PathValue("id"))
+		if err != nil {
+			writeCatalogError(w, r, err)
+			return
+		}
+
+		WriteJSON(w, http.StatusOK, map[string]any{
+			"snapshot":   toMenuSnapshotResponse(snapshot),
 			"request_id": RequestID(r.Context()),
 		})
 	})))
@@ -286,18 +394,118 @@ func toMenuItemResponse(item recipe.MenuItem) menuItemResponse {
 	}
 }
 
+func toMenuSnapshotSummaryResponse(snapshot recipe.MenuSnapshot) menuSnapshotSummaryResponse {
+	response := menuSnapshotSummaryResponse{
+		ID:         snapshot.ID,
+		LocationID: snapshot.LocationID,
+		Version:    snapshot.Version,
+	}
+	if !snapshot.CreatedAt.IsZero() {
+		response.CreatedAt = snapshot.CreatedAt.UTC().Format("2006-01-02T15:04:05Z")
+	}
+	return response
+}
+
+func toMenuSnapshotResponse(snapshot recipe.MenuSnapshot) menuSnapshotResponse {
+	items := make([]snapshotItemResponse, len(snapshot.Items))
+	for i, item := range snapshot.Items {
+		groups := make([]snapshotModifierGroupResponse, len(item.ModifierGroups))
+		for j, group := range item.ModifierGroups {
+			modifiers := make([]snapshotModifierResponse, len(group.Modifiers))
+			for k, modifier := range group.Modifiers {
+				modifiers[k] = snapshotModifierResponse{
+					ModifierID:      modifier.ModifierID,
+					Name:            modifier.Name,
+					PriceDeltaMinor: modifier.PriceDeltaMinor,
+					Currency:        modifier.Currency,
+					MacroDelta: macroPayload{
+						Calories:     modifier.MacroDelta.Calories,
+						ProteinGrams: modifier.MacroDelta.ProteinGrams,
+						CarbsGrams:   modifier.MacroDelta.CarbsGrams,
+						FatGrams:     modifier.MacroDelta.FatGrams,
+					},
+					IngredientUsage: modifier.IngredientUsage,
+					IngredientUnits: modifier.IngredientUnits,
+				}
+			}
+
+			groups[j] = snapshotModifierGroupResponse{
+				GroupID:            group.GroupID,
+				Name:               group.Name,
+				SelectionMin:       group.SelectionMin,
+				SelectionMax:       group.SelectionMax,
+				Required:           group.Required,
+				Exclusive:          group.Exclusive,
+				DefaultModifierIDs: append([]string(nil), group.DefaultModifierIDs...),
+				Modifiers:          modifiers,
+			}
+		}
+
+		items[i] = snapshotItemResponse{
+			MenuItemID:      item.MenuItemID,
+			Name:            item.Name,
+			Description:     item.Description,
+			PriceMinor:      item.PriceMinor,
+			Currency:        item.Currency,
+			Macros:          macroPayload{Calories: item.Macros.Calories, ProteinGrams: item.Macros.ProteinGrams, CarbsGrams: item.Macros.CarbsGrams, FatGrams: item.Macros.FatGrams},
+			IngredientUsage: item.IngredientUsage,
+			IngredientUnits: item.IngredientUnits,
+			ModifierGroups:  groups,
+		}
+	}
+
+	response := menuSnapshotResponse{
+		ID:         snapshot.ID,
+		LocationID: snapshot.LocationID,
+		Version:    snapshot.Version,
+		Items:      items,
+	}
+	if !snapshot.CreatedAt.IsZero() {
+		response.CreatedAt = snapshot.CreatedAt.UTC().Format("2006-01-02T15:04:05Z")
+	}
+	return response
+}
+
 func writeCatalogError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, recipe.ErrInvalidMenuItem):
 		WriteError(w, r, http.StatusBadRequest, "invalid_menu_item", err.Error())
+	case errors.Is(err, recipe.ErrMenuItemAlreadyExists):
+		WriteError(w, r, http.StatusConflict, "menu_item_already_exists", "menu item already exists")
+	case errors.Is(err, recipe.ErrSnapshotAlreadyExists):
+		WriteError(w, r, http.StatusConflict, "snapshot_already_exists", "snapshot already exists")
 	case errors.Is(err, recipe.ErrMenuItemNotFound):
 		WriteError(w, r, http.StatusNotFound, "menu_item_not_found", "menu item not found")
+	case errors.Is(err, recipe.ErrInvalidSnapshot):
+		WriteError(w, r, http.StatusBadRequest, "invalid_snapshot", err.Error())
+	case errors.Is(err, recipe.ErrSnapshotNotFound):
+		WriteError(w, r, http.StatusNotFound, "snapshot_not_found", "snapshot not found")
 	default:
 		WriteError(w, r, http.StatusInternalServerError, "internal_error", "internal server error")
 	}
 }
 
 func decodeCatalogRequest(w http.ResponseWriter, r *http.Request, payload *menuItemRequest) error {
+	r.Body = http.MaxBytesReader(w, r.Body, maxCatalogRequestBodyBytes)
+
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(payload); err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			return errRequestBodyTooLarge
+		}
+		return err
+	}
+
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return errors.New("request body must contain a single json object")
+	}
+
+	return nil
+}
+
+func decodeSnapshotRequest(w http.ResponseWriter, r *http.Request, payload *snapshotRequest) error {
 	r.Body = http.MaxBytesReader(w, r.Body, maxCatalogRequestBodyBytes)
 
 	decoder := json.NewDecoder(r.Body)

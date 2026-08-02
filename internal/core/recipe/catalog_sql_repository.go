@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/ruth411/circle/internal/core/ingredient"
 )
 
@@ -130,7 +131,7 @@ func (r *SQLRepository) CreateSnapshot(ctx context.Context, snapshot MenuSnapsho
 INSERT INTO recipe.menu_snapshots (id, location_id, version)
 VALUES ($1, $2, $3);
 `, snapshot.ID, snapshot.LocationID, snapshot.Version); err != nil {
-		return MenuSnapshot{}, err
+		return MenuSnapshot{}, mapSnapshotWriteError(err)
 	}
 
 	if err = insertSnapshotItems(ctx, tx, snapshot); err != nil {
@@ -232,7 +233,7 @@ WHERE id = $1
   AND location_id = $2;
 `, item.ID, item.LocationID, item.RecipeID, item.Name, item.Description, item.PriceMinor, item.Currency)
 		if err != nil {
-			return err
+			return mapMenuItemWriteError(err)
 		}
 		rowsAffected, err := result.RowsAffected()
 		if err != nil {
@@ -248,7 +249,7 @@ WHERE id = $1
 INSERT INTO recipe.menu_items (id, location_id, recipe_id, name, description, price_minor, currency)
 VALUES ($1, $2, $3, $4, $5, $6, $7);
 `, item.ID, item.LocationID, item.RecipeID, item.Name, item.Description, item.PriceMinor, item.Currency)
-	return err
+	return mapMenuItemWriteError(err)
 }
 
 func replaceModifierGroups(ctx context.Context, db sqlQueryer, item MenuItem) error {
@@ -275,7 +276,7 @@ INSERT INTO recipe.modifier_groups (
 )
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9);
 `, group.ID, item.LocationID, item.ID, group.Name, group.SelectionMin, group.SelectionMax, group.Required, group.Exclusive, defaultsJSON); err != nil {
-			return err
+			return mapMenuItemWriteError(err)
 		}
 
 		for _, modifier := range group.Modifiers {
@@ -290,7 +291,7 @@ INSERT INTO recipe.modifiers (
 )
 VALUES ($1, $2, $3, $4, $5, $6);
 `, modifier.ID, item.LocationID, group.ID, modifier.Name, modifier.PriceDeltaMinor, modifier.Currency); err != nil {
-				return err
+				return mapMenuItemWriteError(err)
 			}
 
 			for i, delta := range modifier.IngredientDeltas {
@@ -306,7 +307,7 @@ INSERT INTO recipe.modifier_ingredient_deltas (
 )
 VALUES ($1, $2, $3, $4, $5, $6, $7);
 `, modifier.ID, i+1, item.LocationID, delta.IngredientID, delta.Quantity, string(delta.Unit), nullIfEmpty(delta.PrepMethod)); err != nil {
-					return err
+					return mapMenuItemWriteError(err)
 				}
 			}
 		}
@@ -689,4 +690,26 @@ func decodeIngredientUnits(raw []byte, out *map[string]ingredient.Unit) error {
 		return nil
 	}
 	return json.Unmarshal(raw, out)
+}
+
+func mapMenuItemWriteError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		return ErrMenuItemAlreadyExists
+	}
+	return err
+}
+
+func mapSnapshotWriteError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		return ErrSnapshotAlreadyExists
+	}
+	return err
 }

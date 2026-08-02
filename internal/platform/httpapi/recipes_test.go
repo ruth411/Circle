@@ -311,6 +311,80 @@ func TestRecipeCreateRouteRejectsUnknownFields(t *testing.T) {
 	}
 }
 
+func TestRecipeCreateRouteReturnsConflictOnDuplicate(t *testing.T) {
+	service := recipe.NewService(fakeRecipeRepository{
+		createFn: func(_ context.Context, value recipe.Recipe) (recipe.Recipe, error) {
+			return recipe.Recipe{}, recipe.ErrRecipeAlreadyExists
+		},
+	}, fakeRecipeIngredientLookup{
+		getFn: func(_ context.Context, locationID string, ingredientID string) (ingredient.Ingredient, error) {
+			return ingredient.Ingredient{ID: ingredientID, LocationID: locationID, BaseUnit: ingredient.UnitGram}, nil
+		},
+	})
+
+	server := NewServerWithDependencies(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		RecipeService:        service,
+		SessionValidator:     seedSessionService(t, "loc-1"),
+		OrganizationResolver: tenancy.StaticOrganizationResolver{"loc-1": "org-1"},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/recipes", bytes.NewBufferString(`{
+		"id":"rec-1",
+		"name":"Chicken Prep",
+		"yield_count":2,
+		"lines":[{"target_type":"ingredient","target_id":"ing-1","quantity":500,"unit":"g"}]
+	}`))
+	req.Header.Set("X-Location-Id", "loc-1")
+	req.Header.Set(sessionIDHeader, "session-1")
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var payload ErrorResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+	if payload.Error.Code != "recipe_already_exists" {
+		t.Fatalf("error code = %q, want recipe_already_exists", payload.Error.Code)
+	}
+}
+
+func TestRecipeUpdateRouteReturnsConflictOnDuplicate(t *testing.T) {
+	service := recipe.NewService(fakeRecipeRepository{
+		updateFn: func(_ context.Context, value recipe.Recipe) (recipe.Recipe, error) {
+			return recipe.Recipe{}, recipe.ErrRecipeAlreadyExists
+		},
+	}, fakeRecipeIngredientLookup{
+		getFn: func(_ context.Context, locationID string, ingredientID string) (ingredient.Ingredient, error) {
+			return ingredient.Ingredient{ID: ingredientID, LocationID: locationID, BaseUnit: ingredient.UnitGram}, nil
+		},
+	})
+
+	server := NewServerWithDependencies(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		RecipeService:        service,
+		SessionValidator:     seedSessionService(t, "loc-1"),
+		OrganizationResolver: tenancy.StaticOrganizationResolver{"loc-1": "org-1"},
+	})
+
+	req := httptest.NewRequest(http.MethodPut, "/recipes/rec-1", bytes.NewBufferString(`{
+		"name":"Chicken Prep",
+		"yield_count":2,
+		"lines":[{"target_type":"ingredient","target_id":"ing-1","quantity":500,"unit":"g"}]
+	}`))
+	req.Header.Set("X-Location-Id", "loc-1")
+	req.Header.Set(sessionIDHeader, "session-1")
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409, body = %s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestRecipeGetRouteReturnsNotFound(t *testing.T) {
 	service := recipe.NewService(fakeRecipeRepository{
 		getFn: func(_ context.Context, locationID string, recipeID string) (recipe.Recipe, error) {

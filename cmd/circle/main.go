@@ -21,6 +21,7 @@ import (
 	"github.com/ruth411/circle/internal/platform/db"
 	"github.com/ruth411/circle/internal/platform/events"
 	"github.com/ruth411/circle/internal/platform/httpapi"
+	"github.com/ruth411/circle/internal/platform/resolve"
 	"github.com/ruth411/circle/internal/purchasing"
 	"github.com/ruth411/circle/internal/tenancy"
 	projectmigrations "github.com/ruth411/circle/migrations"
@@ -71,7 +72,11 @@ func main() {
 	ingredientService := ingredient.NewService(ingredientRepository)
 	recipeRepository := recipe.NewSQLRepository(database)
 	recipeService := recipe.NewService(recipeRepository, ingredientRepository)
-	catalogService := recipe.NewCatalogService(recipeRepository, recipeRepository, ingredientRepository, nil)
+	catalogService := recipe.NewCatalogService(recipeRepository, recipeRepository, ingredientRepository, resolve.SnapshotResolver{
+		Recipes:     recipeRepository,
+		Ingredients: ingredientRepository,
+		MaxDepth:    recipe.DefaultMaxDepth,
+	})
 	outbox := events.NewSQLOutbox(database)
 	orderingService := ordering.NewServiceWithDependencies(ordering.NewSQLRepository(database), recipeRepository, ordering.MockProvider{})
 	inventoryService := inventory.NewService(inventory.NewSQLRepository(database))

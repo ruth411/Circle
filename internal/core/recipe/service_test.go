@@ -182,3 +182,32 @@ func TestUpdateRecipeReturnsRepositoryError(t *testing.T) {
 		t.Fatalf("err = %v, want ErrRecipeNotFound", err)
 	}
 }
+
+func TestCreateRecipePropagatesIngredientLookupInfrastructureError(t *testing.T) {
+	boom := errors.New("db unavailable")
+	service := NewService(fakeRecipeRepository{
+		createFn: func(_ context.Context, recipe Recipe) (Recipe, error) {
+			return recipe, nil
+		},
+	}, fakeIngredientLookup{
+		getFn: func(_ context.Context, locationID string, ingredientID string) (ingredient.Ingredient, error) {
+			return ingredient.Ingredient{}, boom
+		},
+	})
+
+	_, err := service.Create(context.Background(), UpsertInput{
+		ID:         "rec-1",
+		LocationID: "loc-1",
+		Name:       "Recipe",
+		YieldCount: 1,
+		Lines: []RecipeLine{
+			{TargetType: LineTargetIngredient, TargetID: "chicken", Quantity: 1, Unit: ingredient.UnitEach},
+		},
+	})
+	if !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want db unavailable", err)
+	}
+	if errors.Is(err, ErrInvalidRecipe) {
+		t.Fatalf("err = %v, did not want ErrInvalidRecipe", err)
+	}
+}

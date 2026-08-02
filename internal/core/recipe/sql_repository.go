@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/ruth411/circle/internal/core/ingredient"
 )
 
@@ -153,7 +154,7 @@ WHERE id = $1
 `
 		result, err := db.ExecContext(ctx, query, recipe.ID, recipe.LocationID, recipe.Name, recipe.YieldCount)
 		if err != nil {
-			return err
+			return mapRecipeWriteError(err)
 		}
 		rowsAffected, err := result.RowsAffected()
 		if err != nil {
@@ -170,7 +171,7 @@ INSERT INTO recipe.recipes (id, location_id, name, yield_count)
 VALUES ($1, $2, $3, $4);
 `
 	_, err := db.ExecContext(ctx, query, recipe.ID, recipe.LocationID, recipe.Name, recipe.YieldCount)
-	return err
+	return mapRecipeWriteError(err)
 }
 
 func replaceLines(ctx context.Context, db sqlQueryer, recipe Recipe) error {
@@ -268,6 +269,17 @@ ORDER BY line_number;
 		lines = append(lines, line)
 	}
 	return lines, rows.Err()
+}
+
+func mapRecipeWriteError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		return ErrRecipeAlreadyExists
+	}
+	return err
 }
 
 func nullIfEmpty(value string) any {
